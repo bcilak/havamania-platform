@@ -90,6 +90,7 @@ Sol üstten `havamania.com`'u seçin.
 
 ```apache
 ProxyPreserveHost On
+RequestHeader unset X-Forwarded-Host
 RequestHeader set X-Forwarded-Proto "https"
 ProxyTimeout 120
 ProxyPass /.well-known !
@@ -101,6 +102,7 @@ ProxyPassReverse / http://127.0.0.1:3060/
 
 ```apache
 ProxyPreserveHost On
+RequestHeader unset X-Forwarded-Host
 RequestHeader set X-Forwarded-Proto "http"
 ProxyTimeout 120
 ProxyPass /.well-known !
@@ -113,6 +115,7 @@ Her ikisinde de **Save**, ardından sağ üstteki **Apply Changes**.
 Satırların nedeni:
 
 - `ProxyPreserveHost On` olmazsa paneldeki formlar çalışmaz.
+- `RequestHeader unset X-Forwarded-Host`: sunucudaki başka bir sitenin genel ayarı bu başlığı kendi adresiyle doldurabiliyor; o zaman giriş ve paneldeki formlar "Bir şeyler ters gitti" hatası verir.
 - `flushpackets=on` sohbetin kelime kelime akması içindir.
 - `/.well-known !` SSL sertifikasının alınabilmesi içindir.
 
@@ -198,7 +201,7 @@ hm up -d app
 
 | Belirti | Çözüm |
 | --- | --- |
-| Paneldeki formlar hata veriyor ("Invalid Server Actions request") | Apache'de `ProxyPreserveHost On` eksik |
+| Giriş ya da paneldeki formlar "Bir şeyler ters gitti" diyor, logda "Invalid Server Actions request" | Apache'de `ProxyPreserveHost On` ya da `RequestHeader unset X-Forwarded-Host` eksik |
 | Panele giriş yapılıyor ama hemen çıkış yapıyor | Sayfa HTTPS değil; https ile açın |
 | Sohbet cevabı akmıyor, tek parça geliyor | `flushpackets=on` eksik |
 | 502 / 503 | Uygulama kapalı: `hm ps`, `hm logs app --tail 50` |
