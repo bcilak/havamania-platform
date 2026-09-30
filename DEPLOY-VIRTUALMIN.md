@@ -33,21 +33,13 @@ Apache modülleri:
 a2enmod proxy proxy_http headers && systemctl reload apache2
 ```
 
-Kod GitHub'daki özel depodan (`bcilak/havamania-platform`) çekilir. Sunucu GitHub'a bir kez tarayıcı koduyla giriş yapar; anahtar dosyası gerekmez.
+Kodu GitHub'dan çekin (depo herkese açık, giriş gerekmez):
 
-1. GitHub CLI'ı kurun:
-   ```bash
-   apt-get update && apt-get install -y git gh
-   ```
-2. Giriş yapın:
-   ```bash
-   gh auth login
-   ```
-   Sorulara sırayla: **GitHub.com** › **HTTPS** › "Authenticate Git with your GitHub credentials?" **Yes** › **Login with a web browser**. Ekranda 8 haneli bir kod çıkar. Kendi bilgisayarınızda https://github.com/login/device adresini açın, kodu girip **Authorize** deyin.
-3. Depoyu çekin:
-   ```bash
-   gh repo clone bcilak/havamania-platform /opt/havamania
-   ```
+```bash
+git clone https://github.com/bcilak/havamania-platform.git /opt/havamania
+```
+
+> Depo herkese açık: `.env.production`, şifre ve API anahtarları asla depoya eklenmez; yalnızca sunucuda durur.
 
 Ayar dosyasını hazırlayın (bu dosya depoda yoktur, yalnızca sunucuda durur):
 
