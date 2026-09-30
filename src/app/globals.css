@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+/*
+ * Havamania paneli: sitenin kendi dilinden türetildi. SF sistem fontu,
+ * #0071e3 mavisi, #f5f5f7 zemin; koyu temada sitenin telefon laciverti.
+ */
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, monospace;
+
+  --color-ground: #f5f5f7;
+  --color-surface: #ffffff;
+  --color-sunken: #f0f1f4;
+  --color-ink: #1d1d1f;
+  --color-muted: #5c5c61;
+  --color-faint: #86868b;
+  --color-line: #e3e5eb;
+  --color-line-strong: #cfd3db;
+  --color-accent: #0071e3;
+  --color-accent-hover: #0059b8;
+  --color-accent-soft: #e8f1fc;
+  /* Grafik işaretleri: açık zeminde doğrulandı (dataviz validator). */
+  --color-chart: #0071e3;
+  --color-chart-track: #e8f1fc;
+  --color-good: #177343;
+  --color-good-soft: #e5f3eb;
+  --color-warn: #8f5000;
+  --color-warn-soft: #fff2dc;
+  --color-bad: #b42b26;
+  --color-bad-soft: #fdecea;
+  --color-mode-genel: #0071e3;
+  --color-mode-agro: #1a7f47;
+  --color-mode-fly: #2b6fb0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-ground: #0b1b2b;
+    --color-surface: #11263b;
+    --color-sunken: #0e2033;
+    --color-ink: #eef3f8;
+    --color-muted: #a3b3c5;
+    --color-faint: #7d90a6;
+    --color-line: #1f3a55;
+    --color-line-strong: #2b4b6b;
+    --color-accent: #4ea1ff;
+    --color-accent-hover: #7ab8ff;
+    --color-accent-soft: rgba(78, 161, 255, 0.14);
+    /* Koyu zeminde doğrulanan grafik mavisi (L bandı 0.48–0.67). */
+    --color-chart: #4291f0;
+    --color-chart-track: rgba(66, 145, 240, 0.16);
+    --color-good: #5fcf8f;
+    --color-good-soft: rgba(95, 207, 143, 0.13);
+    --color-warn: #f0b35a;
+    --color-warn-soft: rgba(240, 179, 90, 0.13);
+    --color-bad: #ff8a80;
+    --color-bad-soft: rgba(255, 138, 128, 0.13);
+    --color-mode-genel: #4ea1ff;
+    --color-mode-agro: #5fcf8f;
+    --color-mode-fly: #7db4ff;
+  }
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+  }
+}

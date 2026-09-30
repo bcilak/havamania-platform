@@ -1,0 +1,23 @@
+# Yerel geliştirme veritabanı: PostgreSQL 17 + pgvector.
+# Makinedeki diğer projelerle çakışmasın diye 5544 portunda.
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: havamania-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: havamania
+      POSTGRES_PASSWORD: havamania_dev
+      POSTGRES_DB: havamania
+    ports:
+      - "5544:5432"
+    volumes:
+      - havamania-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U havamania -d havamania"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  havamania-db: {}

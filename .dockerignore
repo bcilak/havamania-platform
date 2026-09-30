@@ -1,0 +1,8 @@
+node_modules
+.next
+storage
+.env*
+!.env.example
+.claude
+*.log
+_pull_tmp
