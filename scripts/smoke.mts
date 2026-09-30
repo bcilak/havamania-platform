@@ -6,6 +6,7 @@
  */
 import { SignJWT } from "jose";
 import postgres from "postgres";
+import { storage } from "../src/lib/storage";
 
 const BASE = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
 const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
@@ -14,7 +15,8 @@ const check = (name: string, ok: boolean, detail = "") => results.push({ name, o
 
 const [admin] = await sql`select id, email, name, role from admin_users where role = 'super_admin' and active order by created_at limit 1`;
 const [bot] = await sql`select public_key from bots order by created_at limit 1`;
-const [demoConv] = await sql`select id from conversations where is_demo order by last_message_at desc limit 1`;
+// Canlıda (SEED_DEMO=0) örnek konuşma yoksa gerçek bir konuşmaya bakılır; hiç yoksa detay sayfası atlanır.
+const [demoConv] = await sql`select id from conversations where platform <> 'playground' order by is_demo desc, last_message_at desc limit 1`;
 
 const token = await new SignJWT({ role: admin.role, email: admin.email, name: admin.name })
   .setProtectedHeader({ alg: "HS256" })
@@ -34,7 +36,6 @@ const pages: [string, string][] = [
   ["/admin/medya", "Medya kütüphanesi"],
   ["/admin/konusmalar", "Konuşmalar"],
   ["/admin/konusmalar?durum=olumsuz", "Konuşmalar"],
-  [`/admin/konusmalar/${demoConv?.id}`, "Ayrıntılar"],
   ["/admin/fotograflar", "Fotoğraflar"],
   ["/admin/geri-bildirim", "Geri bildirim"],
   ["/admin/egitim/bilgi-tabani", "Bilgi tabanı"],
@@ -51,6 +52,7 @@ const pages: [string, string][] = [
   ["/admin/ayarlar/denetim", "Denetim kaydı"],
   ["/admin/hesabim", "Hesabım"],
 ];
+if (demoConv) pages.splice(7, 0, [`/admin/konusmalar/${demoConv.id}`, "Ayrıntılar"]);
 for (const [path, expect] of pages) {
   const t = Date.now();
   const res = await fetch(BASE + path, { headers: { cookie }, redirect: "manual" });
@@ -133,7 +135,9 @@ check("widget.js", wjs.ok && (await wjs.text()).includes("havamania-chat"), `${w
 const home = await (await fetch(BASE + "/")).text();
 check("Landing CMS'ten üretiliyor", home.includes("data-scene=\"core\"") && home.includes("Dağınık veri"), "");
 
-// Test cihazının izlerini temizle
+// Test cihazının izlerini temizle (yüklenen görsel dosyası dahil)
+const files = await sql`select storage_key from attachments where app_user_id in (select id from app_users where device_id = ${deviceId})`;
+for (const f of files) await storage.remove(f.storage_key).catch(() => {});
 await sql`delete from attachments where app_user_id in (select id from app_users where device_id = ${deviceId})`;
 await sql`delete from conversations where app_user_id in (select id from app_users where device_id = ${deviceId})`;
 await sql`delete from app_users where device_id = ${deviceId}`;
