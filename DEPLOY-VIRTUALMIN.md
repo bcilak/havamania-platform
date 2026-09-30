@@ -33,20 +33,21 @@ Apache modülleri:
 a2enmod proxy proxy_http headers && systemctl reload apache2
 ```
 
-Kod GitHub'daki özel depodan (`bcilak/havamania-platform`) çekilir. Sunucu depoya yalnızca okuma yetkisi olan bir **deploy key** ile erişir.
+Kod GitHub'daki özel depodan (`bcilak/havamania-platform`) çekilir. Sunucu GitHub'a bir kez tarayıcı koduyla giriş yapar; anahtar dosyası gerekmez.
 
-1. Sunucuda anahtarı üretin ve açık anahtarı ekrana yazdırın:
+1. GitHub CLI'ı kurun:
    ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/havamania_deploy -N "" -C "havamania-sunucu"
-   printf 'Host github-havamania\n  HostName github.com\n  User git\n  IdentityFile ~/.ssh/havamania_deploy\n  IdentitiesOnly yes\n' >> ~/.ssh/config
-   cat ~/.ssh/havamania_deploy.pub
+   apt-get update && apt-get install -y git gh
    ```
-2. Çıkan `ssh-ed25519 ...` satırını GitHub'da ekleyin: depo › **Settings › Deploy keys › Add deploy key**. Başlık: `sunucu 152.53.241.81`. **Allow write access** işaretsiz kalsın.
+2. Giriş yapın:
+   ```bash
+   gh auth login
+   ```
+   Sorulara sırayla: **GitHub.com** › **HTTPS** › "Authenticate Git with your GitHub credentials?" **Yes** › **Login with a web browser**. Ekranda 8 haneli bir kod çıkar. Kendi bilgisayarınızda https://github.com/login/device adresini açın, kodu girip **Authorize** deyin.
 3. Depoyu çekin:
    ```bash
-   git clone git@github-havamania:bcilak/havamania-platform.git /opt/havamania
+   gh repo clone bcilak/havamania-platform /opt/havamania
    ```
-   İlk bağlantıda "Are you sure you want to continue connecting" sorusuna `yes` deyin.
 
 Ayar dosyasını hazırlayın (bu dosya depoda yoktur, yalnızca sunucuda durur):
 
