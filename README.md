@@ -2,7 +2,7 @@
 
 Tek bir Next.js uygulaması üç işi yapar:
 
-- **Site** (`/`): Havamania landing sayfası, içeriği CMS'ten gelir.
+- **Site** (`/`): Havamania landing sayfası, içeriği CMS'ten gelir. Yasal sayfalar: `/gizlilik`, `/kullanim-kosullari`, `/hesap-silme` (eski `/privacy`, `/terms`, `/delete-account` adresleri bunlara yönlenir).
 - **Admin paneli** (`/admin`): CMS, asistan konuşmaları, fotoğraflar, geri bildirim, bot eğitimi, yayın ve gömme, modeller, KVKK.
 - **Sohbet** (`/w/{bot anahtarı}` ve `/api/chat`): mobil uygulamanın WebView'da, web sitelerinin `widget.js` ile açtığı asistan.
 
@@ -37,7 +37,7 @@ Bu makinedeki Windows Uygulama Denetimi ilkesi Next.js'in native SWC dosyasını
 | `npm run dev`           | Geliştirme sunucusu (3110)                                                  |
 | `npm run build` / `start` | Üretim derlemesi ve sunucusu                                             |
 | `npm run setup`         | `db:up` + `db:init` (pgvector) + `db:push` (şema) + `db:seed`              |
-| `npm run smoke`         | Çalışan sunucuya karşı 36 kontrol: tüm admin sayfaları, widget akışı, yetkiler |
+| `npm run smoke`         | Çalışan sunucuya karşı duman testi: tüm admin sayfaları, widget akışı, yetkiler, yasal sayfalar |
 | `npm run smoke:actions` | Veri değiştiren işlemler: CMS kaydet/yayınla, SSS ekle, yayınla/geri al. Sonunda her şeyi eski hâline döndürür |
 | `npm run mock`          | Sahte model (OpenAI uyumlu, araç çağırma dahil) + sahte Havamania veri API'si, port 3199. Anahtarsız geliştirme için |
 | `npm run e2e -- setup`  | Botu sahte servislere bağlar ve yayınlar; önce durumun anlık görüntüsünü alır |
@@ -79,7 +79,8 @@ Panel bunların hepsi olmadan açılır ve çalışır; Pano'daki "Kurulum" list
 5. **Kullanıcı token anahtarı** (Yayın › Gömme): mobil uygulamanın backend'i giriş yapmış kullanıcıyı bu anahtarla imzaladığı HS256 JWT ile tanıtır (`sub` = kullanıcı kimliği). Anonim erişim şu an açık.
 6. **KVKK aydınlatma metni** (Yönetim › KVKK): hukuk onayından geçmeli. Mesajlar yurt dışındaki yapay zekâ sağlayıcılarına gittiği için yurt dışına aktarım sayılır.
 7. **Zamanlanmış temizlik**: `.env.local`'e `CRON_SECRET` ekleyin ve günde bir kez `POST /api/cron/kvkk` (`Authorization: Bearer $CRON_SECRET`) çağırın.
-8. **Canlı ortam**: `APP_URL`, S3/R2 deposu (`STORAGE_DRIVER=s3`), güçlü `ADMIN_PASSWORD`, HTTPS.
+8. **Yasal sayfalar** (İçerik › Yasal sayfalar): şirket unvanı, iletişim e-postası, sunucu konumu ve metinler. Google Play'e gizlilik politikası ve hesap silme adresi olarak buradaki bağlantılar verilir. Metinler uygulamanın topladığı verilerle ve Play Console'daki Veri güvenliği formuyla uyuşmalı; hukuk onayından geçmeli. Politikada asistan verilerinin saklama süresi sonunda silindiği yazar: 7. maddedeki zamanlanmış temizliği açmadan mağazaya göndermeyin.
+9. **Canlı ortam**: `APP_URL`, S3/R2 deposu (`STORAGE_DRIVER=s3`), güçlü `ADMIN_PASSWORD`, HTTPS.
 
 ## Mobil gömme
 

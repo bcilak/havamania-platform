@@ -51,6 +51,7 @@ const pages: [string, string][] = [
   ["/admin/ayarlar/kvkk", "KVKK"],
   ["/admin/ayarlar/denetim", "Denetim kaydı"],
   ["/admin/hesabim", "Hesabım"],
+  ["/admin/yasal", "Yasal sayfalar"],
 ];
 if (demoConv) pages.splice(7, 0, [`/admin/konusmalar/${demoConv.id}`, "Ayrıntılar"]);
 for (const [path, expect] of pages) {
@@ -134,6 +135,16 @@ check("widget.js", wjs.ok && (await wjs.text()).includes("havamania-chat"), `${w
 
 const home = await (await fetch(BASE + "/")).text();
 check("Landing CMS'ten üretiliyor", home.includes("data-scene=\"core\"") && home.includes("Dağınık veri"), "");
+
+/* ---------- Yasal sayfalar (Google Play / App Store) ---------- */
+for (const [path, needle] of [["/gizlilik", "KVKK"], ["/kullanim-kosullari", "Kullanım Koşulları"], ["/hesap-silme", "Silinen veriler"]]) {
+  const r = await fetch(BASE + path);
+  const html = await r.text();
+  check(`Yasal sayfa ${path}`, r.ok && html.includes(needle) && !html.includes("{{"), `${r.status}`);
+}
+const oldPrivacy = await fetch(BASE + "/privacy", { redirect: "manual" });
+check("/privacy → /gizlilik", oldPrivacy.status === 308 && (oldPrivacy.headers.get("location") ?? "").endsWith("/gizlilik"), `${oldPrivacy.status}`);
+check("Landing alt bilgisinde yasal bağlantılar", home.includes("href=\"/gizlilik\"") && home.includes("href=\"/hesap-silme\""), "");
 
 // Test cihazının izlerini temizle (yüklenen görsel dosyası dahil)
 const files = await sql`select storage_key from attachments where app_user_id in (select id from app_users where device_id = ${deviceId})`;

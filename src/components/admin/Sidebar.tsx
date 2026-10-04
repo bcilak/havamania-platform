@@ -19,6 +19,7 @@ import {
   PenLine,
   Plug,
   Rocket,
+  Scale,
   ScrollText,
   ShieldCheck,
   SlidersHorizontal,
@@ -45,6 +46,7 @@ const ICONS = {
   users: Users,
   kvkk: ShieldCheck,
   audit: ScrollText,
+  legal: Scale,
 } as const;
 
 export type NavItem = { href: string; label: string; icon: keyof typeof ICONS; badge?: number };

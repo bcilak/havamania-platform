@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { settings } from "@/db/schema";
 import type { ToolId } from "./bot-config";
+import { LEGAL_DEFAULTS, type LegalSettings } from "./legal";
 
 export type IntegrationSettings = {
   baseUrl: string;
@@ -27,6 +28,7 @@ type SettingsMap = {
   integration: IntegrationSettings;
   embedding: EmbeddingSettings;
   kvkk: KvkkSettings;
+  legal: LegalSettings;
 };
 
 const DEFAULTS: SettingsMap = {
@@ -50,6 +52,7 @@ const DEFAULTS: SettingsMap = {
       "Havamania Asistan ile yaptığınız yazışmalar ve gönderdiğiniz fotoğraflar, size cevap verebilmek ve hizmeti iyileştirmek amacıyla Altıkod Digital Solutions tarafından işlenir ve en fazla 180 gün saklanır. Cevap üretmek için mesajlarınız yurt dışında bulunan yapay zekâ hizmet sağlayıcılarına aktarılabilir. Devam ederek bu işlemeye açık rıza vermiş olursunuz.",
     lastCleanupAt: null,
   },
+  legal: LEGAL_DEFAULTS,
 };
 
 export async function getSetting<K extends keyof SettingsMap>(key: K): Promise<SettingsMap[K]> {

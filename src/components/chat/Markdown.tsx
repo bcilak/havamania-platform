@@ -2,11 +2,12 @@ import { Fragment, type ReactNode } from "react";
 
 /*
  * Model cevapları için küçük ve güvenli bir biçimlendirici: paragraflar,
- * madde işaretleri, numaralı liste, **kalın**, `kod` ve bağlantılar.
- * HTML asla yorumlanmaz; bağlantılar yalnızca http(s) olabilir.
+ * madde işaretleri, numaralı liste, **kalın**, `kod`, bağlantılar ve e-posta adresleri.
+ * Başlıklar (## / ###) yalnızca headings verildiğinde başlık olarak çizilir (yasal sayfalar).
+ * HTML asla yorumlanmaz; bağlantılar yalnızca http(s) ya da mailto olabilir.
  */
 
-const TOKEN = /(\*\*[^*\n]+\*\*|`[^`\n]+`|https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"])/g;
+const TOKEN = /(\*\*[^*\n]+\*\*|`[^`\n]+`|https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"]|[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[a-z]{2,})/gi;
 
 function inline(text: string, keyBase: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -23,6 +24,12 @@ function inline(text: string, keyBase: string): ReactNode[] {
         <code key={key} className="rounded bg-black/5 px-1 font-mono text-[0.92em] dark:bg-white/10">
           {tok.slice(1, -1)}
         </code>,
+      );
+    else if (!/^https?:/i.test(tok))
+      out.push(
+        <a key={key} href={`mailto:${tok}`} className="text-accent underline underline-offset-2 [overflow-wrap:anywhere]">
+          {tok}
+        </a>,
       );
     else
       out.push(
@@ -43,17 +50,23 @@ export function Linkify({ text }: { text: string }) {
 
 const BULLET = /^\s*[-*•]\s+/;
 const NUMBER = /^\s*\d+[.)]\s+/;
-type Group = { kind: "p" | "ul" | "ol"; lines: string[] };
+const HEADING = /^(#{2,3})\s+/;
+type Group = { kind: "p" | "ul" | "ol" | "h2" | "h3"; lines: string[] };
 
 /**
  * Satırları ardışık gruplara ayırır. Modeller çoğu zaman "Özet:" satırının hemen
  * altına boş satır bırakmadan madde yazar; blok bazlı ayırma bunu kaçırıyordu.
  */
-function group(text: string): Group[] {
+function group(text: string, headings: boolean): Group[] {
   const out: Group[] = [];
   for (const line of text.replace(/\r/g, "").split("\n")) {
     if (!line.trim()) {
       out.push({ kind: "p", lines: [] }); // paragraf sonu
+      continue;
+    }
+    const h = headings ? HEADING.exec(line) : null;
+    if (h) {
+      out.push({ kind: h[1].length === 2 ? "h2" : "h3", lines: [line.slice(h[0].length)] });
       continue;
     }
     const kind = BULLET.test(line) ? "ul" : NUMBER.test(line) ? "ol" : "p";
@@ -64,10 +77,22 @@ function group(text: string): Group[] {
   return out.filter((g) => g.lines.length);
 }
 
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, headings = false, className = "grid gap-2" }: { text: string; headings?: boolean; className?: string }) {
   return (
-    <div className="grid gap-2">
-      {group(text).map((g, gi) => {
+    <div className={className}>
+      {group(text, headings).map((g, gi) => {
+        if (g.kind === "h2")
+          return (
+            <h2 key={gi} className="mt-6 text-lg font-semibold tracking-tight text-ink">
+              {inline(g.lines[0], `${gi}`)}
+            </h2>
+          );
+        if (g.kind === "h3")
+          return (
+            <h3 key={gi} className="mt-3 font-semibold text-ink">
+              {inline(g.lines[0], `${gi}`)}
+            </h3>
+          );
         if (g.kind === "ul" || g.kind === "ol") {
           const List = g.kind;
           const re = g.kind === "ul" ? BULLET : NUMBER;

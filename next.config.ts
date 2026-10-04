@@ -22,6 +22,15 @@ const nextConfig: NextConfig = {
     // /admin istekleri proxy'den geçer; varsayılan 10 MB'ta gövde kesilirdi.
     proxyClientMaxBodySize: "25mb",
   },
+  // Mağazalarda ve eski sitede kullanılan İngilizce adresler Türkçe sayfalara gider.
+  async redirects() {
+    return [
+      { source: "/privacy", destination: "/gizlilik", permanent: true },
+      { source: "/privacy-policy", destination: "/gizlilik", permanent: true },
+      { source: "/terms", destination: "/kullanim-kosullari", permanent: true },
+      { source: "/delete-account", destination: "/hesap-silme", permanent: true },
+    ];
+  },
   async headers() {
     return [
       { source: "/:path*", headers: common },

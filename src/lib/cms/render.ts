@@ -257,6 +257,11 @@ ${scene("fly", c.scenes.fly)}
     <img src="/assets/altikod-logo.png" alt="Altıkod Digital Solutions" style="height:clamp(22px,5.4vw,31px);width:auto;display:block;border-radius:7px;box-shadow:0 2px 8px rgba(240,80,60,.28)">
   </div>
   <p style="font-size:clamp(12px,2.6vw,13px);color:${INK_MUTED};max-width:52ch;margin:0 auto 6px;text-wrap:pretty">${e(c.footer.tagline)}</p>
+  <nav aria-label="Yasal" style="display:flex;justify-content:center;flex-wrap:wrap;gap:6px 18px;margin-top:14px;font-size:12px">
+    <a href="/gizlilik" style="color:${INK_MUTED}">Gizlilik Politikası</a>
+    <a href="/kullanim-kosullari" style="color:${INK_MUTED}">Kullanım Koşulları</a>
+    <a href="/hesap-silme" style="color:${INK_MUTED}">Hesap Silme</a>
+  </nav>
   <p style="font-size:11px;color:${INK_MUTED};opacity:.7;margin-top:14px">${e(c.footer.copyright)}</p>
 </footer>`;
 }

@@ -30,6 +30,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       items: [
         { href: "/admin/icerik", label: "Site sayfaları", icon: "cms", perm: "cms" },
         { href: "/admin/medya", label: "Medya kütüphanesi", icon: "media", perm: "media" },
+        { href: "/admin/yasal", label: "Yasal sayfalar", icon: "legal", perm: "cms" },
       ],
     },
     {
