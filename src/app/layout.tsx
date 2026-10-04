@@ -13,7 +13,8 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="tr">
+    // Landing, hidrasyondan önce <html>'e "hm-js" sınıfını ekler; bu fark beklenen bir durum.
+    <html lang="tr" suppressHydrationWarning>
       <body>{children}</body>
     </html>
   );

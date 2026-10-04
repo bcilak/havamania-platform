@@ -67,7 +67,8 @@ export class LandingEngine {
   qa(sel, ctx){ return [...(ctx||this.root).querySelectorAll(sel)]; }
 
   setupReveal(){
-    const els = this.qa('[data-reveal]');
+    // Hero CSS ile acilir (LANDING_CSS); motor yalnizca kaydirinca gorunenleri yonetir.
+    const els = this.qa('[data-reveal]').filter(el=>!el.closest('header'));
     els.forEach(el=>{
       el.style.transition = 'opacity .8s cubic-bezier(.22,1,.36,1), transform .8s cubic-bezier(.22,1,.36,1)';
       el.style.transitionDelay = (Number(el.dataset.delay||0)*0.08)+'s';
@@ -162,6 +163,8 @@ export class LandingEngine {
     this.particleMode=t.part; this.lightning=!!t.lightning;
     const dark=!!t.dark;
     this.qa('[data-capt]', sceneEl).forEach(el=>{ el.style.color=dark?'#fff':'#1d1d1f'; el.style.textShadow=dark?'0 2px 18px rgba(0,0,0,.45)':'none'; });
+    // Ust baslik sahne vurgusu renginde yazili; koyu temada okunmuyordu, acik tona gecer.
+    this.qa('[data-ey]', sceneEl).forEach(el=>{ el.dataset.accent=el.dataset.accent||el.style.color; el.style.color=dark?'rgba(255,255,255,.82)':el.dataset.accent; el.style.textShadow=dark?'0 1px 10px rgba(0,0,0,.45)':'none'; });
     this.qa('[data-caps]', sceneEl).forEach(el=>{ el.style.color=dark?'rgba(255,255,255,.86)':'#5c5c61'; el.style.textShadow=dark?'0 1px 10px rgba(0,0,0,.45)':'none'; });
     if(sceneEl) sceneEl.__dark = dark;
     this.dark=dark;

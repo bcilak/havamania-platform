@@ -70,7 +70,7 @@ function scene(key: SceneKey, s: SceneContent): string {
   const chips = s.chips
     .map(
       (c, i) => `
-      <div data-chip="${i}" style="position:absolute;left:50%;top:50%;z-index:4;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:clamp(7px,1.6vw,11px) clamp(9px,1.9vw,13px);min-width:clamp(84px,22vw,118px);box-shadow:0 20px 40px rgba(20,40,70,.14);opacity:0;will-change:transform,opacity">
+      <div data-chip="${i}" aria-hidden="true" style="position:absolute;left:50%;top:50%;z-index:4;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:clamp(7px,1.6vw,11px) clamp(9px,1.9vw,13px);min-width:clamp(84px,22vw,118px);box-shadow:0 20px 40px rgba(20,40,70,.14);opacity:0;will-change:transform,opacity">
         <span data-ic aria-hidden="true" style="position:absolute;top:-9px;right:-9px;width:clamp(20px,5vw,26px);height:clamp(20px,5vw,26px);border-radius:50%;background:${st.accent};color:#fff;display:grid;place-items:center;font-size:clamp(10px,2.6vw,13px)">${e(c.icon)}</span>
         <div style="font-size:clamp(8px,2vw,10px);text-transform:uppercase;letter-spacing:.08em;color:${INK_MUTED}">${e(c.label)}</div>
         <div style="font-size:clamp(15px,4vw,21px);font-weight:700;letter-spacing:-.02em;margin-top:2px">${e(c.value)}</div>
@@ -162,8 +162,16 @@ export const LANDING_CSS = `
   .hm-cta:hover{transform:scale(1.03)}
   /* JS açıksa reveal öğeleri ilk karede gizli başlar (motor sonra açar); böylece
      sunucudan gelen içerik görünüp kaybolup yeniden belirmez. */
-  .hm-js .hm-landing [data-reveal]{opacity:0;transform:translateY(30px)}
-  @media (prefers-reduced-motion:reduce){.hm-js .hm-landing [data-reveal]{opacity:1;transform:none}}
+  .hm-js .hm-landing [data-reveal]:not(header > *){opacity:0;transform:translateY(30px)}
+  @media (prefers-reduced-motion:reduce){.hm-js .hm-landing [data-reveal]:not(header > *){opacity:1;transform:none}}
+  /* Hero, JavaScript yüklenmesini beklemeden ilk boyamada CSS ile açılır; aksi hâlde
+     başlık hidrasyona kadar görünmez kalır ve LCP gecikir. */
+  @keyframes hm-rise{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:none}}
+  .hm-landing header > [data-reveal]{animation:hm-rise .8s cubic-bezier(.22,1,.36,1) both}
+  .hm-landing header > [data-delay="1"]{animation-delay:.08s}
+  .hm-landing header > [data-delay="2"]{animation-delay:.16s}
+  .hm-landing header > [data-delay="3"]{animation-delay:.24s}
+  @media (prefers-reduced-motion:reduce){.hm-landing header > [data-reveal]{animation:none}}
   @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(8px)}}
   @keyframes breeze{0%,100%{rotate:-4deg}50%{rotate:4deg}}
   @media (prefers-reduced-motion:reduce){.hm-landing *{animation-duration:.001s!important}}
@@ -195,9 +203,9 @@ export function renderLanding(c: LandingContent): string {
 
 <nav style="position:fixed;top:0;left:0;right:0;z-index:200;min-height:52px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px clamp(12px,4vw,40px);background:rgba(255,255,255,.72);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid rgba(0,0,0,.06)">
   <div style="display:flex;align-items:center;gap:clamp(7px,1.6vw,11px);min-width:0">
-    <img src="/assets/havamania-logo.png" alt="Havamania" style="height:clamp(20px,5vw,28px);width:auto;display:block;flex:0 0 auto">
+    <img src="/assets/havamania-logo.png" alt="Havamania" width="382" height="120" style="height:clamp(20px,5vw,28px);width:auto;display:block;flex:0 0 auto">
     <span style="width:1px;height:20px;background:#d2d2d7;flex:0 0 auto"></span>
-    <img src="/assets/altikod-logo.png" alt="Altıkod Digital Solutions" style="height:clamp(18px,4.4vw,25px);width:auto;display:block;border-radius:6px;flex:0 0 auto;box-shadow:0 2px 8px rgba(240,80,60,.28)">
+    <img src="/assets/altikod-logo.png" alt="Altıkod Digital Solutions" width="171" height="96" style="height:clamp(18px,4.4vw,25px);width:auto;display:block;border-radius:6px;flex:0 0 auto;box-shadow:0 2px 8px rgba(240,80,60,.28)">
   </div>
   <div style="display:flex;align-items:center;gap:clamp(10px,2.6vw,24px);flex:0 0 auto">
     ${navLink("#panel", "Panel")}
@@ -210,7 +218,7 @@ export function renderLanding(c: LandingContent): string {
   <div data-reveal style="color:#0071e3;font-size:clamp(16px,2.4vw,24px);font-weight:600;margin-bottom:6px">${e(c.hero.kicker)}</div>
   <h1 data-reveal data-delay="1" style="font-size:clamp(31px,8.4vw,86px);font-weight:600;letter-spacing:-.03em;line-height:1.06;max-width:15ch;text-wrap:balance;background:linear-gradient(180deg,#1d1d1f,#3a3a3c);-webkit-background-clip:text;background-clip:text;color:transparent">${e(c.hero.title)}</h1>
   <p data-reveal data-delay="2" style="font-size:clamp(15px,2.6vw,25px);color:${INK_MUTED};margin-top:14px;max-width:34ch;text-wrap:pretty">${e(c.hero.subtitle)}</p>
-  <div data-reveal data-delay="3" style="margin-top:clamp(28px,6vh,44px);color:${INK_MUTED};font-size:13px;animation:bob 2s infinite">${e(c.hero.hint)}</div>
+  <div data-reveal data-delay="3" style="margin-top:clamp(28px,6vh,44px);color:${INK_MUTED};font-size:13px"><span style="display:inline-block;animation:bob 2s infinite">${e(c.hero.hint)}</span></div>
 </header>
 ${scene("core", c.scenes.core)}
 
@@ -252,9 +260,9 @@ ${scene("fly", c.scenes.fly)}
 
 <footer style="position:relative;z-index:1;background:#f5f5f7;padding:clamp(32px,6vh,44px) clamp(18px,5vw,24px);text-align:center;border-top:1px solid #d2d2d7">
   <div style="display:flex;align-items:center;justify-content:center;gap:11px;margin-bottom:14px;flex-wrap:wrap">
-    <img src="/assets/havamania-logo.png" alt="Havamania" style="height:clamp(24px,6vw,34px);width:auto;display:block">
+    <img src="/assets/havamania-logo.png" alt="Havamania" width="382" height="120" style="height:clamp(24px,6vw,34px);width:auto;display:block">
     <span style="width:1px;height:20px;background:#d2d2d7"></span>
-    <img src="/assets/altikod-logo.png" alt="Altıkod Digital Solutions" style="height:clamp(22px,5.4vw,31px);width:auto;display:block;border-radius:7px;box-shadow:0 2px 8px rgba(240,80,60,.28)">
+    <img src="/assets/altikod-logo.png" alt="Altıkod Digital Solutions" width="171" height="96" style="height:clamp(22px,5.4vw,31px);width:auto;display:block;border-radius:7px;box-shadow:0 2px 8px rgba(240,80,60,.28)">
   </div>
   <p style="font-size:clamp(12px,2.6vw,13px);color:${INK_MUTED};max-width:52ch;margin:0 auto 6px;text-wrap:pretty">${e(c.footer.tagline)}</p>
   <nav aria-label="Yasal" style="display:flex;justify-content:center;flex-wrap:wrap;gap:6px 18px;margin-top:14px;font-size:12px">

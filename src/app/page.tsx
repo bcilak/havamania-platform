@@ -4,6 +4,7 @@ import { getAdmin } from "@/lib/auth";
 import { getLanding } from "@/lib/cms/store";
 import { LANDING_CSS, renderLanding } from "@/lib/cms/render";
 import { can } from "@/lib/roles";
+import { getSetting } from "@/lib/settings";
 
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
@@ -34,9 +35,20 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
 
 export default async function Home({ searchParams }: Props) {
   const { c, preview } = await content(await searchParams);
+  const legal = await getSetting("legal");
+  const base = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
+  // Arama motorları için kurum ve site bilgisi (sayfada görünmez).
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@graph": [
+      { "@type": "Organization", "@id": `${base}/#org`, name: legal.company, url: base, logo: `${base}/assets/havamania-logo.png` },
+      { "@type": "WebSite", name: "Havamania", url: base, inLanguage: "tr-TR", publisher: { "@id": `${base}/#org` } },
+    ],
+  };
   return (
     <>
       <style>{LANDING_CSS}</style>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }} />
       {/* JS varsa reveal öğeleri baştan gizli başlar; yoksa (JS kapalı) içerik görünür kalır. Açılıştaki yanıp sönmeyi önler. */}
       <script dangerouslySetInnerHTML={{ __html: "document.documentElement.classList.add('hm-js')" }} />
       {preview && (
