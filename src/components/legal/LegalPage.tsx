@@ -13,7 +13,7 @@ export function legalMetadata(slug: LegalSlug): Metadata {
     title: { absolute: `${page.title} · Havamania` },
     description: page.description,
     alternates: { canonical: page.path },
-    openGraph: { type: "article", siteName: "Havamania", title: page.title, description: page.description, locale: "tr_TR", url: page.path },
+    openGraph: { type: "article", siteName: "Havamania", title: page.title, description: page.description, locale: "tr_TR", url: page.path, images: [{ url: "/og.png", width: 1200, height: 630 }] },
   };
 }
 

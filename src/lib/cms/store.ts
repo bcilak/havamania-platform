@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { cache } from "react";
 import { db } from "@/db";
 import { cmsDocuments } from "@/db/schema";
+import { migrateLanding } from "./migrate";
 import { defaultLandingContent, landingSchema, type LandingContent } from "./schema";
 
 export const LANDING_ID = "landing";
@@ -12,7 +13,7 @@ function coerce(raw: unknown): LandingContent {
   if (!raw || typeof raw !== "object") return d;
   const merged = { ...d, ...(raw as object), seo: { ...d.seo, ...((raw as LandingContent).seo ?? {}) } };
   const parsed = landingSchema.safeParse(merged);
-  return parsed.success ? parsed.data : d;
+  return parsed.success ? migrateLanding(parsed.data) : d;
 }
 
 /** Aynı istek içinde (metadata + sayfa) tek sorgu. */

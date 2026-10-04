@@ -42,7 +42,7 @@ const LABELS: Record<string, string> = {
   seo: "Arama motorları",
   hero: "Hero",
   nav: "Menü",
-  phase2: "Faz 2",
+  phase2: "Modlar bölümü",
   assistant: "Asistan bölümü",
   premium: "Premium",
   footer: "Alt bilgi",

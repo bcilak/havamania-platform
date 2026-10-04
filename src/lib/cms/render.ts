@@ -1,3 +1,5 @@
+import { TONES, type ToneId } from "@/lib/bot-config";
+import { iconSvg, resolveIcon } from "./icons";
 import type { LandingContent, SceneContent, SceneKey } from "./schema";
 
 /*
@@ -10,6 +12,12 @@ const e = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 
 const INK_MUTED = "#5c5c61";
+
+/** Simge adıysa SVG, tanınmayan eski bir değerse (emoji) olduğu gibi metin. */
+const icon = (value: string) => {
+  const name = resolveIcon(value);
+  return name ? iconSvg(name) : e(value);
+};
 
 type SceneStyle = {
   id?: string;
@@ -32,6 +40,7 @@ const SCENES: Record<SceneKey, SceneStyle> = {
     screens: ["#3a8fd8,#bfe0f5", "#0e2c1c,#1a4d2e", "#0b2f52,#0f3f68"],
   },
   agro: {
+    id: "agro",
     accent: "#1a7f47",
     atmos: "spring,spring,rain",
     baseVh: 420,
@@ -40,6 +49,7 @@ const SCENES: Record<SceneKey, SceneStyle> = {
     screens: ["#2f7d3f,#a8d9a0", "#0e2c1c,#1a4d2e", "#0b2f52,#0f3f68"],
   },
   fly: {
+    id: "fly",
     accent: "#2b6fb0",
     atmos: "cloudy,storm,storm",
     baseVh: 420,
@@ -51,7 +61,8 @@ const SCENES: Record<SceneKey, SceneStyle> = {
 
 const screenBox = (top: string, grad: string) =>
   `position:absolute;left:0;right:0;top:${top};height:100%;padding:3.2em 1.25em 1.25em;color:#fff;overflow:hidden;display:flex;flex-direction:column;background:linear-gradient(175deg,${grad})`;
-const loc = (t: string) => `<div style="font-size:.85em;opacity:.82;letter-spacing:.03em">${e(t)}</div>`;
+// Konum satırı dar telefonda alt satıra kayıp ekran içeriğini taşırıyordu; tek satırda kısaltılır.
+const loc = (t: string) => `<div style="flex:0 0 auto;font-size:.85em;opacity:.82;letter-spacing:.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e(t)}</div>`;
 const glass = "background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.16);border-radius:.9em";
 
 function scene(key: SceneKey, s: SceneContent): string {
@@ -71,10 +82,10 @@ function scene(key: SceneKey, s: SceneContent): string {
     .map(
       (c, i) => `
       <div data-chip="${i}" aria-hidden="true" style="position:absolute;left:50%;top:50%;z-index:4;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1px solid rgba(0,0,0,.06);border-radius:14px;padding:clamp(7px,1.6vw,11px) clamp(9px,1.9vw,13px);min-width:clamp(84px,22vw,118px);box-shadow:0 20px 40px rgba(20,40,70,.14);opacity:0;will-change:transform,opacity">
-        <span data-ic aria-hidden="true" style="position:absolute;top:-9px;right:-9px;width:clamp(20px,5vw,26px);height:clamp(20px,5vw,26px);border-radius:50%;background:${st.accent};color:#fff;display:grid;place-items:center;font-size:clamp(10px,2.6vw,13px)">${e(c.icon)}</span>
-        <div style="font-size:clamp(8px,2vw,10px);text-transform:uppercase;letter-spacing:.08em;color:${INK_MUTED}">${e(c.label)}</div>
+        <span data-ic aria-hidden="true" style="position:absolute;top:-9px;right:-9px;width:clamp(22px,5.4vw,26px);height:clamp(22px,5.4vw,26px);border-radius:50%;background:${st.accent};color:#fff;display:grid;place-items:center;font-size:clamp(10px,2.6vw,13px)"><span style="width:56%;height:56%;display:grid;place-items:center">${icon(c.icon)}</span></span>
+        <div style="font-size:clamp(10px,2.4vw,11px);text-transform:uppercase;letter-spacing:.06em;color:${INK_MUTED}">${e(c.label)}</div>
         <div style="font-size:clamp(15px,4vw,21px);font-weight:700;letter-spacing:-.02em;margin-top:2px">${e(c.value)}</div>
-        <div style="font-size:clamp(8px,2vw,10px);color:${INK_MUTED}">${e(c.unit)}</div>
+        <div style="font-size:clamp(10px,2.4vw,11px);color:${INK_MUTED}">${e(c.unit)}</div>
       </div>`,
     )
     .join("");
@@ -109,6 +120,9 @@ function scene(key: SceneKey, s: SceneContent): string {
     )
     .join("");
 
+  // Telefon içindeki her ölçü em cinsinden; yazı boyutu telefon genişliğiyle aynı min()
+  // formülünden gelir (genişlik × 13/270). cqw bir öğenin kendi kabında çalışmadığı için
+  // önceki 4.8cqw ekran genişliğine göre hesaplanıyor, dar telefonda içerik taşıyordu.
   return `
 <section${st.id ? ` id="${st.id}"` : ""} data-scene="${key}" data-accent="${st.accent}" data-atmos="${st.atmos}" data-base-vh="${st.baseVh}" data-screen-label="${st.label}" style="position:relative;z-index:1;height:${st.baseVh}vh;background:${st.bg}">
   <div data-pin style="position:sticky;top:0;height:100svh;overflow:hidden;display:flex;align-items:center;justify-content:center">
@@ -116,7 +130,7 @@ function scene(key: SceneKey, s: SceneContent): string {
       <div data-cap style="position:relative;display:grid;width:min(700px,94vw);text-align:center;pointer-events:none;z-index:9;flex:0 0 auto">${layers}
       </div>
 ${chips}
-      <div data-phone style="position:relative;flex:0 0 auto;width:min(46vw,270px,calc((63svh - 12px) * 270 / 558));height:auto;aspect-ratio:270/558;container-type:inline-size;background:#0b1b2b;border-radius:clamp(28px,6vw,40px);padding:clamp(8px,1.8vw,12px);box-shadow:0 40px 90px rgba(10,30,60,.35);z-index:5;font-size:clamp(8px,4.8cqw,13px);will-change:transform">
+      <div data-phone style="position:relative;flex:0 0 auto;width:min(46vw,270px,calc((63svh - 12px) * 270 / 558));height:auto;aspect-ratio:270/558;container-type:inline-size;background:#0b1b2b;border-radius:clamp(28px,6vw,40px);padding:clamp(8px,1.8vw,12px);box-shadow:0 40px 90px rgba(10,30,60,.35);z-index:5;font-size:min(2.2148vw,13px,calc((63svh - 12px) * 13 / 558));will-change:transform">
         <div style="position:absolute;top:clamp(8px,1.8vw,12px);left:50%;transform:translateX(-50%);width:7.4em;height:1.7em;background:#0b1b2b;border-radius:0 0 1em 1em;z-index:6"></div>
         <div style="position:relative;width:100%;height:100%;border-radius:clamp(20px,4.6vw,30px);overflow:hidden;background:#0e2033">
           <div data-reel style="position:absolute;inset:0;will-change:transform">
@@ -150,6 +164,36 @@ ${chips}
 </section>`;
 }
 
+/* Asistan bölümündeki ton örneği: aynı soruya her tonda verilen cevap. Etiketler
+   asistanın gerçek ton listesinden (bot-config) gelir. */
+const TONE_ORDER: ToneId[] = ["samimi", "resmi", "dengeli", "kisa", "uzman"];
+const TONE_QUESTION = "Yarın sabah ilaçlama yapabilir miyim?";
+const TONE_ANSWERS: Record<ToneId, string> = {
+  samimi: "Yarın sabah tam sana göre 🌤️ 06:00–09:00 arası rüzgâr 8 km/s, yağış yok. Öğleden sonra rüzgâr artıyor, erken başla!",
+  resmi: "Yarın 06:00–09:00 saatleri arasında ilaçlama için uygun koşullar bekleniyor. Rüzgâr hızı 8 km/s, yağış beklenmiyor. Öğleden sonra rüzgârın artması öngörülüyor.",
+  dengeli: "Evet, yarın 06:00–09:00 arası uygun: rüzgâr 8 km/s, yağış yok. Öğleden sonra rüzgâr 20 km/s'ye çıkıyor, sabahı tercih edin.",
+  kisa: "Evet. 06:00–09:00 · rüzgâr 8 km/s · yağış yok.",
+  uzman: "Uygun pencere 06:00–09:00. Rüzgâr 8 km/s (sürüklenme riski düşük), bağıl nem %65, sıcaklık 14 °C; damla tutunması için iyi koşullar. 13:00'ten sonra rüzgâr 20 km/s'ye çıkıyor. Ürün etiketindeki bekleme süresine uyun.",
+};
+
+function toneDemo(): string {
+  const chips = TONE_ORDER.map(
+    (t) => `<button type="button" class="hm-tone" data-tone="${t}" aria-pressed="${t === "dengeli"}">${e(TONES[t].label)}</button>`,
+  ).join("");
+  const answers = TONE_ORDER.map(
+    (t) =>
+      `<div data-answer="${t}"${t === "dengeli" ? " data-on" : ""} style="justify-self:start;max-width:88%;padding:.7em .95em;border-radius:1.1em;border-bottom-left-radius:.3em;background:#f0f2f5;color:#1d1d1f;font-size:15px;line-height:1.45">${e(TONE_ANSWERS[t])}</div>`,
+  ).join("");
+  return `
+    <div data-reveal data-delay="3" style="margin-top:clamp(28px,5vh,40px)">
+      <div role="group" aria-label="Asistan tonu" style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px">${chips}</div>
+      <div style="max-width:540px;margin:20px auto 0;background:#fff;border:1px solid #d2d2d7;border-radius:24px;padding:clamp(14px,3vw,20px);text-align:left;box-shadow:0 20px 50px rgba(20,40,70,.08);display:flex;flex-direction:column;gap:10px">
+        <div style="align-self:flex-end;max-width:80%;padding:.7em .95em;border-radius:1.1em;border-bottom-right-radius:.3em;background:#0071e3;color:#fff;font-size:15px;line-height:1.45">${e(TONE_QUESTION)}</div>
+        <div aria-live="polite" style="display:grid">${answers}</div>
+      </div>
+    </div>`;
+}
+
 export const LANDING_CSS = `
   .hm-landing *{margin:0;padding:0;box-sizing:border-box}
   html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
@@ -158,6 +202,19 @@ export const LANDING_CSS = `
   .hm-landing a{color:#0071e3;text-decoration:none}
   .hm-landing ::selection{background:rgba(0,113,227,.18)}
   .hm-nav-link:hover{opacity:1!important}
+  /* Dar ekranda menüde yalnızca logo ve buton kalır; Altıkod logosu alt bilgide. */
+  @media (max-width:640px){.hm-nav-link,.hm-nav-partner{display:none!important}}
+  .hm-premium-grid{display:grid;grid-template-columns:1fr;gap:clamp(12px,2.5vw,18px);max-width:1040px;margin:clamp(32px,6vh,50px) auto 0}
+  @media (min-width:560px){.hm-premium-grid{grid-template-columns:repeat(2,1fr)}}
+  @media (min-width:960px){.hm-premium-grid{grid-template-columns:repeat(4,1fr)}}
+  .hm-tone{border:1px solid #d2d2d7;background:#fff;color:#1d1d1f;border-radius:999px;padding:8px 14px;font:inherit;font-size:14px;line-height:1.2;cursor:pointer;transition:background .2s,color .2s,border-color .2s}
+  .hm-tone:hover{border-color:#86868b}
+  .hm-tone[aria-pressed="true"]{background:#1d1d1f;border-color:#1d1d1f;color:#fff}
+  .hm-tone:focus-visible{outline:2px solid #0071e3;outline-offset:2px}
+  @keyframes hm-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  /* Cevaplar üst üste durur; kutu en uzun cevap kadar yüksek kalır, ton değişince sayfa kaymaz. */
+  [data-answer]{grid-area:1/1;visibility:hidden}
+  [data-answer][data-on]{visibility:visible;animation:hm-fade .3s ease}
   .hm-nav-cta:hover,.hm-cta:hover{background:#0059b8!important;color:#fff!important}
   .hm-cta:hover{transform:scale(1.03)}
   /* JS açıksa reveal öğeleri ilk karede gizli başlar (motor sonra açar); böylece
@@ -183,13 +240,14 @@ export const LANDING_CSS = `
     [data-capt]{font-size:clamp(17px,3.4vw,22px)!important}
     [data-caps]{font-size:11px!important}
     [data-ey]{font-size:10px!important}
-    [data-phone]{width:min(46vw,270px,calc((100svh - 152px) * 270 / 558))!important}
+    [data-phone]{width:min(46vw,270px,calc((100svh - 152px) * 270 / 558))!important;font-size:min(2.2148vw,13px,calc((100svh - 152px) * 13 / 558))!important}
   }
 `;
 
 export function renderLanding(c: LandingContent): string {
   const navLink = (href: string, label: string) =>
-    `<a href="${href}" class="hm-nav-link" style="color:#1d1d1f;font-size:clamp(11px,2.7vw,13px);opacity:.85;white-space:nowrap">${e(label)}</a>`;
+    `<a href="${href}" class="hm-nav-link" style="color:#1d1d1f;font-size:13px;opacity:.85;white-space:nowrap">${e(label)}</a>`;
+  const copyright = c.footer.copyright.replace(/©\s*\d{4}/, `© ${new Date().getFullYear()}`);
 
   return `
 <div style="position:fixed;inset:0;z-index:0;opacity:0;transition:opacity .8s ease;pointer-events:none" data-atmos-root>
@@ -203,14 +261,16 @@ export function renderLanding(c: LandingContent): string {
 
 <nav style="position:fixed;top:0;left:0;right:0;z-index:200;min-height:52px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px clamp(12px,4vw,40px);background:rgba(255,255,255,.72);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid rgba(0,0,0,.06)">
   <div style="display:flex;align-items:center;gap:clamp(7px,1.6vw,11px);min-width:0">
-    <img src="/assets/havamania-logo.png" alt="Havamania" width="382" height="120" style="height:clamp(20px,5vw,28px);width:auto;display:block;flex:0 0 auto">
-    <span style="width:1px;height:20px;background:#d2d2d7;flex:0 0 auto"></span>
-    <img src="/assets/altikod-logo.png" alt="Altıkod Digital Solutions" width="171" height="96" style="height:clamp(18px,4.4vw,25px);width:auto;display:block;border-radius:6px;flex:0 0 auto;box-shadow:0 2px 8px rgba(240,80,60,.28)">
+    <img src="/assets/havamania-logo.png" alt="Havamania" width="413" height="120" style="height:clamp(20px,5vw,28px);width:auto;display:block;flex:0 0 auto">
+    <span class="hm-nav-partner" style="width:1px;height:20px;background:#d2d2d7;flex:0 0 auto"></span>
+    <img class="hm-nav-partner" src="/assets/altikod-logo.png" alt="Altıkod Digital Solutions" width="171" height="96" style="height:clamp(18px,4.4vw,25px);width:auto;display:block;border-radius:6px;flex:0 0 auto;box-shadow:0 2px 8px rgba(240,80,60,.28)">
   </div>
-  <div style="display:flex;align-items:center;gap:clamp(10px,2.6vw,24px);flex:0 0 auto">
-    ${navLink("#panel", "Panel")}
-    ${navLink("#faz2", "Faz 2")}
-    <a href="#premium" class="hm-nav-cta" style="background:#0071e3;color:#fff;padding:6px clamp(11px,3vw,15px);border-radius:999px;font-size:clamp(11px,2.7vw,13px);font-weight:500;white-space:nowrap">${e(c.nav.ctaLabel)}</a>
+  <div style="display:flex;align-items:center;gap:clamp(14px,2.6vw,24px);flex:0 0 auto">
+    ${navLink("#panel", "Hava")}
+    ${navLink("#agro", "Agro")}
+    ${navLink("#fly", "Fly")}
+    ${navLink("#asistan", "Asistan")}
+    <a href="#premium" class="hm-nav-cta" style="background:#0071e3;color:#fff;padding:7px 15px;border-radius:999px;font-size:13px;font-weight:500;white-space:nowrap">${e(c.nav.ctaLabel)}</a>
   </div>
 </nav>
 
@@ -222,7 +282,7 @@ export function renderLanding(c: LandingContent): string {
 </header>
 ${scene("core", c.scenes.core)}
 
-<section id="faz2" data-screen-label="Faz 2" style="position:relative;z-index:1;min-height:70svh;display:flex;align-items:center;justify-content:center;text-align:center;padding:clamp(64px,12vh,90px) clamp(18px,5vw,24px);background:linear-gradient(180deg,#0b1b2b,#132a44);color:#fff">
+<section id="modlar" data-screen-label="Modlar" style="position:relative;z-index:1;min-height:70svh;display:flex;align-items:center;justify-content:center;text-align:center;padding:calc(clamp(64px,12vh,90px) + 14vh) clamp(18px,5vw,24px);background:linear-gradient(180deg,transparent,#0b1b2b 18vh,#132a44 calc(100% - 18vh),transparent);color:#fff">
   <div style="max-width:760px;margin:0 auto">
     <div data-reveal style="display:inline-block;background:rgba(125,180,255,.16);color:#7db4ff;border:1px solid rgba(125,180,255,.3);padding:5px 14px;border-radius:999px;font-size:clamp(12px,2.6vw,13px);font-weight:600;margin-bottom:20px">${e(c.phase2.badge)}</div>
     <h2 data-reveal data-delay="1" style="font-size:clamp(26px,6vw,52px);font-weight:600;letter-spacing:-.03em;line-height:1.09;color:#fff;max-width:16ch;margin:0 auto;text-wrap:balance">${e(c.phase2.title)}</h2>
@@ -232,11 +292,12 @@ ${scene("core", c.scenes.core)}
 ${scene("agro", c.scenes.agro)}
 ${scene("fly", c.scenes.fly)}
 
-<section style="position:relative;z-index:1;background:#f5f5f7">
-  <div style="padding:clamp(64px,12vh,140px) clamp(18px,5vw,24px);max-width:760px;margin:0 auto;text-align:center">
+<section id="asistan" data-screen-label="Asistan" style="position:relative;z-index:1;background:linear-gradient(180deg,transparent,#f5f5f7 18vh)">
+  <div style="padding:calc(clamp(64px,12vh,140px) + 12vh) clamp(18px,5vw,24px) clamp(64px,12vh,140px);max-width:760px;margin:0 auto;text-align:center">
     <div data-reveal style="font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#0071e3;margin-bottom:14px">${e(c.assistant.eyebrow)}</div>
     <h2 data-reveal data-delay="1" style="font-size:clamp(26px,6vw,52px);font-weight:600;letter-spacing:-.03em;line-height:1.09;text-wrap:balance">${e(c.assistant.title)}</h2>
     <p data-reveal data-delay="2" style="font-size:clamp(15px,2.6vw,24px);color:${INK_MUTED};margin-top:18px;line-height:1.4;text-wrap:pretty">${e(c.assistant.text)}</p>
+    ${toneDemo()}
   </div>
 </section>
 
@@ -245,11 +306,11 @@ ${scene("fly", c.scenes.fly)}
     <h2 data-reveal style="font-size:clamp(26px,6vw,52px);font-weight:600;letter-spacing:-.03em;line-height:1.09">${e(c.premium.title)}</h2>
     <p data-reveal data-delay="1" style="font-size:clamp(15px,2.6vw,24px);color:${INK_MUTED};margin-top:18px;line-height:1.4;text-wrap:pretty">${e(c.premium.text)}</p>
   </div>
-  <div data-reveal data-delay="2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:clamp(12px,2.5vw,18px);max-width:900px;margin:clamp(32px,6vh,50px) auto 0">
+  <div data-reveal data-delay="2" class="hm-premium-grid">
     ${c.premium.cards
       .map(
         (p) =>
-          `<div style="background:#fff;border:1px solid #d2d2d7;border-radius:20px;padding:clamp(20px,4vw,26px) clamp(18px,4vw,24px);text-align:left"><span aria-hidden="true" style="font-size:26px;display:block;margin-bottom:12px">${e(p.icon)}</span><h3 style="font-size:clamp(16px,3.4vw,18px);font-weight:600;margin-bottom:6px">${e(p.title)}</h3><p style="font-size:clamp(13px,2.6vw,14px);color:${INK_MUTED}">${e(p.text)}</p></div>`,
+          `<div style="background:#fff;border:1px solid #d2d2d7;border-radius:20px;padding:clamp(20px,4vw,26px) clamp(18px,4vw,24px);text-align:left"><span aria-hidden="true" style="width:40px;height:40px;border-radius:12px;background:rgba(0,113,227,.1);color:#0071e3;display:grid;place-items:center;margin-bottom:14px;font-size:20px"><span style="width:22px;height:22px;display:grid;place-items:center">${icon(p.icon)}</span></span><h3 style="font-size:clamp(16px,3.4vw,18px);font-weight:600;margin-bottom:6px">${e(p.title)}</h3><p style="font-size:clamp(13px,2.6vw,14px);color:${INK_MUTED}">${e(p.text)}</p></div>`,
       )
       .join("\n    ")}
   </div>
@@ -260,7 +321,7 @@ ${scene("fly", c.scenes.fly)}
 
 <footer style="position:relative;z-index:1;background:#f5f5f7;padding:clamp(32px,6vh,44px) clamp(18px,5vw,24px);text-align:center;border-top:1px solid #d2d2d7">
   <div style="display:flex;align-items:center;justify-content:center;gap:11px;margin-bottom:14px;flex-wrap:wrap">
-    <img src="/assets/havamania-logo.png" alt="Havamania" width="382" height="120" style="height:clamp(24px,6vw,34px);width:auto;display:block">
+    <img src="/assets/havamania-logo.png" alt="Havamania" width="413" height="120" style="height:clamp(24px,6vw,34px);width:auto;display:block">
     <span style="width:1px;height:20px;background:#d2d2d7"></span>
     <img src="/assets/altikod-logo.png" alt="Altıkod Digital Solutions" width="171" height="96" style="height:clamp(22px,5.4vw,31px);width:auto;display:block;border-radius:7px;box-shadow:0 2px 8px rgba(240,80,60,.28)">
   </div>
@@ -270,6 +331,6 @@ ${scene("fly", c.scenes.fly)}
     <a href="/kullanim-kosullari" style="color:${INK_MUTED}">Kullanım Koşulları</a>
     <a href="/hesap-silme" style="color:${INK_MUTED}">Hesap Silme</a>
   </nav>
-  <p style="font-size:11px;color:${INK_MUTED};opacity:.7;margin-top:14px">${e(c.footer.copyright)}</p>
+  <p style="font-size:11px;color:${INK_MUTED};opacity:.7;margin-top:14px">${e(copyright)}</p>
 </footer>`;
 }

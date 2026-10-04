@@ -2,7 +2,8 @@ import { ExternalLink } from "lucide-react";
 import { ConfirmButton, SubmitButton } from "@/components/client";
 import { Badge, btn, Field, Flash, inputCls, Notice, PageHeader, Panel, selectCls, Tabs, textareaCls } from "@/components/ui";
 import { requireAdmin } from "@/lib/auth";
-import { getLandingDoc } from "@/lib/cms/store";
+import { LANDING_ICONS, resolveIcon } from "@/lib/cms/icons";
+import { getLanding, getLandingDoc } from "@/lib/cms/store";
 import { defaultLandingContent, SCENE_META, type LandingContent, type SceneKey } from "@/lib/cms/schema";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtDateTime } from "@/lib/format";
@@ -15,7 +16,7 @@ const SECTIONS = [
   { id: "core", label: "Panel sahnesi" },
   { id: "agro", label: "Agro sahnesi" },
   { id: "fly", label: "Fly sahnesi" },
-  { id: "bolumler", label: "Faz 2 ve Asistan" },
+  { id: "bolumler", label: "Modlar ve Asistan" },
   { id: "premium", label: "Premium ve alt bilgi" },
 ];
 
@@ -24,6 +25,21 @@ const STAGES = ["Parçalar dağılırken", "Parçalar birleşirken ve 1. ekranda
 function Input({ name, value, label, max, className }: { name: string; value: string; label?: string; max?: number; className?: string }) {
   return (
     <input name={name} defaultValue={value} maxLength={max} aria-label={label ?? name} className={`${inputCls} ${className ?? ""}`} />
+  );
+}
+
+/** Landing simgeleri her cihazda aynı görünsün diye emoji yerine simge seti kullanılır. */
+function IconSelect({ name, value, label, className }: { name: string; value: string; label: string; className?: string }) {
+  const current = resolveIcon(value);
+  return (
+    <select name={name} defaultValue={current ?? value} aria-label={label} className={`${selectCls} ${className ?? ""}`}>
+      {!current && value && <option value={value}>{value} (eski)</option>}
+      {Object.entries(LANDING_ICONS).map(([key, icon]) => (
+        <option key={key} value={key}>
+          {icon.label}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -55,7 +71,7 @@ function SceneEditor({ s, accent }: { s: LandingContent["scenes"][SceneKey]; acc
             <thead className="text-left text-[11.5px] font-semibold tracking-wide text-muted uppercase">
               <tr>
                 <th className="pb-2">#</th>
-                <th className="pb-2">İkon</th>
+                <th className="pb-2">Simge</th>
                 <th className="pb-2">Çip etiketi</th>
                 <th className="pb-2">Değer</th>
                 <th className="pb-2">Birim</th>
@@ -68,7 +84,7 @@ function SceneEditor({ s, accent }: { s: LandingContent["scenes"][SceneKey]; acc
               {s.chips.map((c, i) => (
                 <tr key={i}>
                   <td className="tabular pr-2 text-muted">{i + 1}</td>
-                  <td className="py-1 pr-2"><Input name={`scene.chips.${i}.icon`} value={c.icon} label="İkon" className="w-14 text-center" max={8} /></td>
+                  <td className="py-1 pr-2"><IconSelect name={`scene.chips.${i}.icon`} value={c.icon} label="Simge" className="w-40" /></td>
                   <td className="py-1 pr-2"><Input name={`scene.chips.${i}.label`} value={c.label} label="Çip etiketi" max={30} /></td>
                   <td className="py-1 pr-2"><Input name={`scene.chips.${i}.value`} value={c.value} label="Çip değeri" className="w-20" max={14} /></td>
                   <td className="py-1 pr-2"><Input name={`scene.chips.${i}.unit`} value={c.unit} label="Çip birimi" max={30} /></td>
@@ -135,7 +151,8 @@ export default async function CmsPage({ searchParams }: { searchParams: SearchPa
   const sp = await searchParams;
   const section = SECTIONS.some((s) => s.id === param(sp, "bolum")) ? param(sp, "bolum") : "genel";
   const doc = await getLandingDoc();
-  const draft: LandingContent = doc?.draft ?? defaultLandingContent();
+  // Okurken güncel biçime dönüştürülmüş taslak (eski emoji simgeleri, eski varsayılan metinler).
+  const draft: LandingContent = doc ? await getLanding("draft") : defaultLandingContent();
   const dirty = !doc?.published || JSON.stringify(doc.draft) !== JSON.stringify(doc.published);
 
   return (
@@ -209,7 +226,7 @@ export default async function CmsPage({ searchParams }: { searchParams: SearchPa
 
         {section === "bolumler" && (
           <div className="grid gap-5 lg:grid-cols-2">
-            <Panel title="Faz 2 bölümü" description="Panel sahnesinden sonra gelen koyu bölüm.">
+            <Panel title="Modlar bölümü" description="Panel sahnesinden sonra gelen koyu bölüm.">
               <div className="grid gap-3">
                 <Field label="Rozet" htmlFor="p2b"><input id="p2b" name="phase2.badge" defaultValue={draft.phase2.badge} maxLength={30} className={inputCls} /></Field>
                 <Field label="Başlık" htmlFor="p2t"><input id="p2t" name="phase2.title" defaultValue={draft.phase2.title} maxLength={80} className={inputCls} /></Field>
@@ -237,9 +254,9 @@ export default async function CmsPage({ searchParams }: { searchParams: SearchPa
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   {draft.premium.cards.map((c, i) => (
-                    <fieldset key={i} className="grid grid-cols-[64px_1fr] gap-2 rounded-lg border border-line p-3">
+                    <fieldset key={i} className="grid grid-cols-[minmax(0,10rem)_1fr] gap-2 rounded-lg border border-line p-3">
                       <legend className="px-1 text-xs text-muted">{i + 1}. kart</legend>
-                      <Input name={`premium.cards.${i}.icon`} value={c.icon} label="İkon" className="text-center" max={8} />
+                      <IconSelect name={`premium.cards.${i}.icon`} value={c.icon} label="Simge" />
                       <Input name={`premium.cards.${i}.title`} value={c.title} label="Başlık" max={40} />
                       <Input name={`premium.cards.${i}.text`} value={c.text} label="Metin" className="col-span-2" max={120} />
                     </fieldset>

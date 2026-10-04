@@ -21,6 +21,7 @@ export class LandingEngine {
     this.setupReveal();
     this.setupAtmos();
     this.setupScenes();
+    this.setupTones();
     this.onScroll = () => { if(!this._tick){ this._tick = true; requestAnimationFrame(()=>{ this.renderAll(); this._tick=false; }); } };
     this.onResize = () => {
       clearTimeout(this._rz);
@@ -47,6 +48,17 @@ export class LandingEngine {
     if(this.raf) cancelAnimationFrame(this.raf);
     clearTimeout(this._rz);
     if(this.io) this.io.disconnect();
+    if(this.toneBtns) this.toneBtns.forEach(b=>b.removeEventListener('click', this.onTone));
+  }
+  // Asistan bolumundeki ton ornegi: secilen tonun cevabini goster.
+  setupTones(){
+    this.toneBtns = this.qa('[data-tone]');
+    this.onTone = (ev)=>{
+      const t = ev.currentTarget.dataset.tone;
+      this.toneBtns.forEach(b=>b.setAttribute('aria-pressed', String(b.dataset.tone===t)));
+      this.qa('[data-answer]').forEach(a=>a.toggleAttribute('data-on', a.dataset.answer===t));
+    };
+    this.toneBtns.forEach(b=>b.addEventListener('click', this.onTone));
   }
   componentDidUpdate(){
     // Editordeki slider'lar degisince yeniden yuklemeye gerek kalmadan
@@ -294,6 +306,26 @@ export class LandingEngine {
         o.minX=need0.x; o.minY=need0.y; fits();
       }
       o.shrinkPhone = o.phoneScale < BURST_POP;
+
+      // Dar ekranda cihazin yaninda yer yoksa yukaridaki yontem cipleri basligin ve
+      // birbirlerinin ustune itiyordu. Bunun yerine 3 satir x 2 sutun: satirlar baslik
+      // blogunun altindan nokta gostergesinin ustune kadar esit aralikli, sutunlar
+      // ekran kenarinda; cihaz aralarina sigacak kadar kuculur (kenarlarina hafif biner).
+      o.grid = !o.clearX && innerWidth < 760;
+      if(o.grid){
+        const cap=this.q('[data-cap]', o.stage), dots=this.q('[data-dots]', o.stage);
+        const halfW=o.chipW/2, halfH=o.chipH/2, BADGE=10;   // ikon rozeti 9px tasar
+        const colX=st.width/2 - halfW - BADGE;
+        const top=(cap.offsetTop+cap.offsetHeight) - o.stageH/2 + halfH + BADGE + 4;
+        const bottom=dots.offsetTop - o.stageH/2 - halfH - 6;
+        if(bottom>top){
+          const rows=[top,(top+bottom)/2,bottom];
+          o.gridPos=this.burst.map((b,i)=>({x:(i%2?1:-1)*colX, y:rows[Math.floor(i/2)]}));
+          const room=colX - halfW + 12;
+          o.phoneScale=Math.max(this.PHONE_MIN_SCALE, Math.min(BURST_POP, room/Math.max(1,o.phoneHalfW)));
+          o.shrinkPhone=o.phoneScale < BURST_POP;
+        } else o.grid=false;
+      }
     });
   }
 
@@ -303,21 +335,33 @@ export class LandingEngine {
     const easeOut=t=>1-Math.pow(1-t,3);
     const easeInOut=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
     const vh=innerHeight;
-    let pinnedAny=false;
+    // Atmosfer yalnizca sahne sabitlenince degil, sahne ekrana girmeden biraz once de
+    // acilir: komsu bolumlerin saydam gecis bantlari (Modlar, Asistan) gokyuzunu
+    // gostersin, sert renk kirilmasi olmasin. Birden cok sahne yakinsa ekranda en cok
+    // yer kaplayan secilir.
+    if(this.atmosOn){
+      let best=null, bestW=0;
+      const pad=vh*.25;
+      this.scenes.forEach(o=>{
+        if(!o.atm.length) return;
+        const r=o.el.getBoundingClientRect();
+        const w=Math.min(vh, r.bottom+pad) - Math.max(0, r.top-pad);
+        if(w>bestW){ bestW=w; best={o, r}; }
+      });
+      if(best){
+        const p=clamp((-best.r.top)/Math.max(1,best.o.el.offsetHeight-vh));
+        this.atmosRoot.style.opacity=1;
+        this.atmosVisible=true;
+        this.applyTheme(best.o.atm[Math.min(best.o.atm.length-1, Math.floor(p*best.o.atm.length))], best.o.el);
+        this.startLoop();
+      } else { this.atmosRoot.style.opacity=0; this.atmosVisible=false; }
+    }
     this.scenes.forEach(o=>{
       const r=o.el.getBoundingClientRect();
       const total=Math.max(1,o.el.offsetHeight-vh);
       const p=clamp((-r.top)/total);
       const visible = r.bottom>0 && r.top<vh;
       if(!visible) return;
-      const pinned = r.top<=1 && r.bottom>=vh-1;
-      if(o.atm.length && this.atmosOn && pinned){
-        pinnedAny=true;
-        this.atmosRoot.style.opacity=1;
-        this.atmosVisible=true;
-        this.applyTheme(o.atm[Math.min(o.atm.length-1, Math.floor(p*o.atm.length))], o.el);
-        this.startLoop();
-      }
       let assemble;
       if(p<0.10) assemble=easeOut(clamp(p/0.10));
       else if(p<0.34) assemble=1-easeInOut(clamp((p-0.10)/0.24));
@@ -332,10 +376,13 @@ export class LandingEngine {
         // Cihazin merkez kaymasi yonune gore farkli pay gerektirir.
         if(o.clearX) ax=Math.max(ax, o.minX + sx*o.phoneCX);  // cihazın yanından geç
         else if(o.clearY) ay=Math.max(ay, o.minY + sy*o.phoneCY); // yer yoksa üstünden/altından
-        const bx=sx*ax, by=sy*ay;
+        let bx=sx*ax, by=sy*ay, rMax=b.r, sMax=b.s;
+        if(o.grid){ const g=o.gridPos[i]; bx=g.x; by=g.y; rMax=b.r*.35; sMax=1; }
         const cxp=lerp(t.x, bx, assemble), cyp=lerp(t.y, by, assemble);
-        const rot=lerp(0,b.r,assemble), sc=lerp(0.34,b.s,assemble);
+        const rot=lerp(0,rMax,assemble), sc=lerp(0.34,sMax,assemble);
         chip.style.transform='translate(-50%,-50%) translate('+cxp+'px,'+cyp+'px) rotate('+rot+'deg) scale('+sc+')';
+        // dar ekran duzeninde cipler cihazin kenarina biner; ustte kalmalari gerekir
+        chip.style.zIndex = o.grid ? '6' : '';
         chip.style.opacity = assemble<0.06 ? 0 : 1;
         const slot=o.slots[i];
         if(slot){
@@ -374,6 +421,5 @@ export class LandingEngine {
         d.style.background=on?(dk?'#fff':o.accent):(dk?'rgba(255,255,255,.35)':'#d2d2d7');
       });
     });
-    if(!pinnedAny && this.atmosOn){ this.atmosRoot.style.opacity=0; this.atmosVisible=false; }
   }
 }

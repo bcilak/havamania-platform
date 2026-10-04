@@ -21,7 +21,8 @@ export const viewport: Viewport = { themeColor: "#ffffff", colorScheme: "light" 
 
 export async function generateMetadata({ searchParams }: Props): Promise<Metadata> {
   const { c, preview } = await content(await searchParams);
-  const images = c.seo.ogImage ? [{ url: c.seo.ogImage, width: 1200, height: 630 }] : undefined;
+  // Panelde paylaşım görseli seçilmediyse varsayılan görsel (public/og.png).
+  const images = [{ url: c.seo.ogImage || "/og.png", width: 1200, height: 630 }];
   return {
     metadataBase: new URL(process.env.APP_URL || "http://localhost:3110"),
     title: { absolute: c.seo.title },
@@ -29,7 +30,7 @@ export async function generateMetadata({ searchParams }: Props): Promise<Metadat
     alternates: { canonical: "/" },
     robots: preview ? { index: false, follow: false } : undefined,
     openGraph: { type: "website", siteName: "Havamania", title: c.seo.title, description: c.seo.description, images, locale: "tr_TR", url: "/" },
-    twitter: { card: images ? "summary_large_image" : "summary", title: c.seo.title, description: c.seo.description, images: images?.map((i) => i.url) },
+    twitter: { card: "summary_large_image", title: c.seo.title, description: c.seo.description, images: images.map((i) => i.url) },
   };
 }
 

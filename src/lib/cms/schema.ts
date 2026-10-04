@@ -16,7 +16,8 @@ export const captionSchema = z.object({
 });
 
 export const chipSchema = z.object({
-  icon: text(8),
+  /** Simge adı (icons.ts) ya da eski içerikten kalan emoji. */
+  icon: text(24),
   label: text(30),
   value: text(14),
   unit: text(30),
@@ -96,7 +97,7 @@ export const landingSchema = z.object({
     title: text(60),
     text: text(220),
     cards: z
-      .array(z.object({ icon: text(8), title: text(40), text: text(120) }))
+      .array(z.object({ icon: text(24), title: text(40), text: text(120) }))
       .length(4),
     ctaLabel: text(40),
   }),
@@ -142,12 +143,12 @@ export function defaultLandingContent(): LandingContent {
           { eyebrow: "Havamania Asistan", title: "Ve seninle konuşur.", sub: "Sizin dilinizden bir meteorolog." },
         ],
         chips: [
-          { icon: "🌡️", label: "Hissedilen", value: "31°", unit: "rüzgâr dahil" },
-          { icon: "☀️", label: "UV İndeksi", value: "7", unit: "çok yüksek" },
-          { icon: "💨", label: "Rüzgâr", value: "17", unit: "km/sa" },
-          { icon: "💧", label: "Nem", value: "%52", unit: "bağıl" },
-          { icon: "👁️", label: "Görüş", value: "40", unit: "km" },
-          { icon: "📊", label: "Basınç", value: "994", unit: "hPa" },
+          { icon: "thermometer", label: "Hissedilen", value: "31°", unit: "rüzgâr dahil" },
+          { icon: "sun", label: "UV İndeksi", value: "7", unit: "çok yüksek" },
+          { icon: "wind", label: "Rüzgâr", value: "17", unit: "km/sa" },
+          { icon: "droplets", label: "Nem", value: "%52", unit: "bağıl" },
+          { icon: "eye", label: "Görüş", value: "40", unit: "km" },
+          { icon: "gauge", label: "Basınç", value: "994", unit: "hPa" },
         ],
         screen1: {
           location: "BALIKESİR · Az Bulutlu",
@@ -187,18 +188,18 @@ export function defaultLandingContent(): LandingContent {
       },
       agro: {
         captions: [
-          { eyebrow: "Faz 2 · Agro Modu", title: "Tarlanın ham verisi.", sub: "Toprak, rüzgâr, don riski — dağınık." },
+          { eyebrow: "Agro Modu", title: "Tarlanın ham verisi.", sub: "Toprak, rüzgâr, don riski — dağınık." },
           { eyebrow: "Birleşme", title: "Tarımsal karara dönüşür.", sub: "Her metrik ürününe göre anlam kazanır." },
           { eyebrow: "Zamanlama", title: "Doğru gün, doğru saat.", sub: "İlaçlama ve hasat penceresi hazır." },
           { eyebrow: "Agro Asistan", title: "Ve tarlanla konuşur.", sub: "Ürününü bilen bir tarım danışmanı." },
         ],
         chips: [
-          { icon: "❄️", label: "Don Riski", value: "Düşük", unit: "min 4°C" },
-          { icon: "🌱", label: "Toprak Nemi", value: "%38", unit: "kök bölgesi" },
-          { icon: "💧", label: "Buharlaşma", value: "3.2", unit: "mm · ETo" },
-          { icon: "🌧️", label: "Yağış 48s", value: "%65", unit: "sulamayı ertele" },
-          { icon: "🧴", label: "İlaçlama", value: "06–09", unit: "rüzgâr <8" },
-          { icon: "🌾", label: "Hasat Skoru", value: "7/10", unit: "Perşembe" },
+          { icon: "snowflake", label: "Don Riski", value: "Düşük", unit: "min 4°C" },
+          { icon: "sprout", label: "Toprak Nemi", value: "%38", unit: "kök bölgesi" },
+          { icon: "droplets", label: "Buharlaşma", value: "3.2", unit: "mm · ETo" },
+          { icon: "cloud-rain", label: "Yağış 48s", value: "%65", unit: "sulamayı ertele" },
+          { icon: "spray-can", label: "İlaçlama", value: "06–09", unit: "rüzgâr <8" },
+          { icon: "wheat", label: "Hasat Skoru", value: "7/10", unit: "Perşembe" },
         ],
         screen1: {
           location: "TARLA · Buğday · Konya Ovası",
@@ -240,18 +241,18 @@ export function defaultLandingContent(): LandingContent {
       },
       fly: {
         captions: [
-          { eyebrow: "Faz 2 · Fly Modu", title: "Gökyüzünün ham verisi.", sub: "Rüzgâr, türbülans, buzlanma — dağınık." },
+          { eyebrow: "Fly Modu", title: "Gökyüzünün ham verisi.", sub: "Rüzgâr, türbülans, buzlanma — dağınık." },
           { eyebrow: "Birleşme", title: "Uçuş radarına dönüşür.", sub: "Rota boyunca seviye seviye analiz." },
           { eyebrow: "Konfor", title: "En pürüzsüz irtifa.", sub: "Jet akımına göre rota önerisi." },
           { eyebrow: "Fly Asistan", title: "Ve rotanı anlatır.", sub: "Kokpit verisi, sade bir dille." },
         ],
         chips: [
-          { icon: "🌀", label: "Türbülans", value: "Orta", unit: "FL300–360" },
-          { icon: "🧭", label: "Rüzgâr", value: "120", unit: "kt · baş" },
-          { icon: "✈️", label: "Jet Akımı", value: "Aktif", unit: "FL340" },
-          { icon: "❄️", label: "Buzlanma", value: "Düşük", unit: "tırmanış" },
-          { icon: "👁️", label: "Görüş", value: "10", unit: "km" },
-          { icon: "☁️", label: "Bulut Tabanı", value: "4000", unit: "ft" },
+          { icon: "tornado", label: "Türbülans", value: "Orta", unit: "FL300–360" },
+          { icon: "compass", label: "Rüzgâr", value: "120", unit: "kt · baş" },
+          { icon: "plane", label: "Jet Akımı", value: "Aktif", unit: "FL340" },
+          { icon: "snowflake", label: "Buzlanma", value: "Düşük", unit: "tırmanış" },
+          { icon: "eye", label: "Görüş", value: "10", unit: "km" },
+          { icon: "cloud", label: "Bulut Tabanı", value: "4000", unit: "ft" },
         ],
         screen1: {
           location: "UÇUŞ · IST → ESB · FL350",
@@ -292,9 +293,9 @@ export function defaultLandingContent(): LandingContent {
       },
     },
     phase2: {
-      badge: "Faz 2 · Yolda",
-      title: "Aynı zekâ, iki yeni dünya.",
-      text: "Havamania'nın motoru şimdi tarlanın ve gökyüzünün diline çevriliyor: Agro Modu ve Fly Modu. Aynı patla-topla, yeni veriler.",
+      badge: "Üç mod · Tek uygulama",
+      title: "Aynı zekâ, üç dünya.",
+      text: "Havamania'nın motoru şehirde, tarlada ve gökyüzünde aynı dili konuşur: Hava, Agro ve Fly modları. Aynı patla-topla, her moda özel veriler.",
     },
     assistant: {
       eyebrow: "Havamania Asistan",
@@ -305,10 +306,10 @@ export function defaultLandingContent(): LandingContent {
       title: "Sınırları kaldırın.",
       text: "Standart tahminlerin ötesine geçin — %100 kişiselleştirilmiş bir hava, tarım ve uçuş deneyimi.",
       cards: [
-        { icon: "📈", title: "Gelişmiş Analizler", text: "Hava, tarla ve uçuş için özelleştirilmiş raporlar." },
-        { icon: "👤", title: "Tam AI Kişiselleştirme", text: "Tüm iletişim tonları ve sınırsız ilgi alanı." },
-        { icon: "🗂️", title: "Arşiv Özellikleri", text: "Benzersiz seyahat ve sezon hafızası." },
-        { icon: "🎨", title: "Özel Temalar", text: "Ruh haline ve mevsime göre deneyim." },
+        { icon: "chart-line", title: "Gelişmiş Analizler", text: "Hava, tarla ve uçuş için özelleştirilmiş raporlar." },
+        { icon: "user-round", title: "Tam AI Kişiselleştirme", text: "Tüm iletişim tonları ve sınırsız ilgi alanı." },
+        { icon: "archive", title: "Arşiv Özellikleri", text: "Benzersiz seyahat ve sezon hafızası." },
+        { icon: "palette", title: "Özel Temalar", text: "Ruh haline ve mevsime göre deneyim." },
       ],
       ctaLabel: "Premium Deneyime Geçiş Yapın",
     },
