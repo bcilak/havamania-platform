@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "db:up": "docker compose up -d --wait db",
     "db:init": "tsx --env-file=.env.local scripts/db-init.mts",
-    "db:push": "drizzle-kit push --force",
+    "db:push": "drizzle-kit push",
     "db:seed": "tsx --env-file=.env.local scripts/seed.mts",
     "setup": "npm run db:up && npm run db:init && npm run db:push && npm run db:seed",
     "smoke": "tsx --env-file=.env.local scripts/smoke.mts",
@@ -20,6 +20,7 @@
     "smoke:chat": "tsx --env-file=.env.local scripts/smoke-chat.mts",
     "db:init:prod": "tsx scripts/db-init.mts",
     "db:seed:prod": "tsx scripts/seed.mts",
+    "test:unit": "tsx --test \"src/**/*.test.ts\"",
     "smoke:prod": "tsx scripts/smoke.mts"
   },
   "dependencies": {

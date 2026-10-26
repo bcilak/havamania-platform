@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Copy, LoaderCircle } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type TextareaHTMLAttributes } from "react";
 import { useFormStatus } from "react-dom";
 import { btn, cx } from "./ui";
 
@@ -113,5 +113,23 @@ export function CopyButton({ text, label = "Kopyala", className }: { text: strin
       {state === "done" ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
       {state === "done" ? "Kopyalandı" : state === "failed" ? "Seçip kopyalayın" : label}
     </button>
+  );
+}
+
+/** Karakter sayaçlı textarea. Sınır sunucuda da denetlenir (strStrict); burada yalnızca kullanıcıyı bilgilendirir. */
+export function CountedTextarea({
+  max,
+  defaultValue,
+  className,
+  ...rest
+}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "maxLength" | "defaultValue"> & { max: number; defaultValue?: string }) {
+  const [length, setLength] = useState((defaultValue ?? "").length);
+  return (
+    <div className="grid gap-1">
+      <textarea {...rest} defaultValue={defaultValue} maxLength={max} className={className} onChange={(e) => setLength(e.currentTarget.value.length)} />
+      <span className={cx("tabular text-right text-xs", length >= max * 0.9 ? "text-warn" : "text-muted")}>
+        {length} / {max}
+      </span>
+    </div>
   );
 }

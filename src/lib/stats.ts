@@ -18,7 +18,7 @@ export async function periodStats(days: number, offsetDays = 0) {
       (select count(*)::int from feedback f join conversations c on c.id = f.conversation_id, win
          where c.platform <> 'playground' and f.rating = -1 and f.created_at >= win.since and f.created_at < win.until) as negative,
       (select coalesce(sum(m.cost_usd), 0)::float from messages m join conversations c on c.id = m.conversation_id, win
-         where m.created_at >= win.since and m.created_at < win.until) as cost`;
+         where c.platform <> 'playground' and m.created_at >= win.since and m.created_at < win.until) as cost`;
   return row;
 }
 

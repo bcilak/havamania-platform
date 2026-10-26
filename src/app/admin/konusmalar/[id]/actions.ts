@@ -7,7 +7,7 @@ import { attachments, conversations, type ChatMode } from "@/db/schema";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
 import { createCorrection } from "@/lib/corrections";
-import { done, fail, str } from "@/lib/form";
+import { done, fail, str, strStrict } from "@/lib/form";
 import { storage } from "@/lib/storage";
 
 export async function toggleFlag(fd: FormData) {
@@ -36,7 +36,7 @@ export async function addCorrection(fd: FormData) {
   const conversationId = str(fd, "conversationId");
   const back = `/admin/konusmalar/${conversationId}`;
   const question = str(fd, "question", 1000);
-  const correct = str(fd, "correct", 4000);
+  const correct = strStrict(fd, "correct", 4000, "Doğru cevap", back);
   if (!question || !correct) fail(back, "Soru ve doğru cevap boş olamaz.");
   const [c] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!c) fail("/admin/konusmalar", "Konuşma bulunamadı.");
@@ -53,7 +53,7 @@ export async function addCorrection(fd: FormData) {
   });
   await audit(admin, "correction.create", conversationId, { question });
   revalidatePath(back);
-  done(back, "Düzeltme bilgi tabanına eklendi. Bir sonraki yayında kullanıcılara ulaşır.");
+  done(back, "Düzeltme taslağa eklendi; yayınladığınızda canlı asistan kullanır.");
 }
 
 export async function togglePhoto(fd: FormData) {

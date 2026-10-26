@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { providers, type ProviderKind, type ProviderModel } from "@/db/schema";
 import { decryptOrNull } from "@/lib/crypto";
 import { getSetting } from "@/lib/settings";
+import { modelMetaOrDefault } from "./model-meta";
 
 export type ProviderRow = typeof providers.$inferSelect;
 
@@ -90,19 +91,16 @@ export async function getProvider(id: string): Promise<ProviderRow | null> {
 export async function resolveModel(providerId: string, modelId: string): Promise<{ model: LanguageModel; meta: ProviderModel; provider: ProviderRow }> {
   const provider = await getProvider(providerId);
   if (!provider) throw new ModelConfigError("Seçili model sağlayıcısı silinmiş. Asistan ayarlarından yeni bir model seçin.");
-  const meta = provider.models.find((m) => m.id === modelId) ?? {
-    id: modelId,
-    label: modelId,
-    vision: false,
-    tools: true,
-    inputPer1M: 0,
-    outputPer1M: 0,
-  };
+  const meta = modelMetaOrDefault(provider.models, modelId);
   return { model: factory(provider).chat(modelId), meta, provider };
 }
 
-export async function resolveEmbedding(): Promise<{ model: EmbeddingModel; id: string } | null> {
-  const cfg = await getSetting("embedding");
+/**
+ * Embedding modeli. `ref` verilirse (yayındaki sürümün dondurulmuş ayarı) o kullanılır,
+ * verilmezse güncel ayar. Ayar kapalıysa ya da sağlayıcı yoksa null.
+ */
+export async function resolveEmbedding(ref?: { providerId: string | null; model: string | null }): Promise<{ model: EmbeddingModel; id: string } | null> {
+  const cfg = ref ?? (await getSetting("embedding"));
   if (!cfg.providerId || !cfg.model) return null;
   const provider = await getProvider(cfg.providerId);
   if (!provider) return null;

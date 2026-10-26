@@ -1,11 +1,13 @@
 import Link from "next/link";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { ThumbsDown, ThumbsUp } from "lucide-react";
 import { db } from "@/db";
-import { conversations, feedback, messages } from "@/db/schema";
+import { conversations, corrections, feedback, messages } from "@/db/schema";
 import { SubmitButton } from "@/components/client";
 import { Badge, btn, EmptyState, Flash, ModeBadge, PageHeader, Tabs } from "@/components/ui";
 import { requireAdmin } from "@/lib/auth";
+import { getMainBot } from "@/lib/bot";
+import { loadCorrectionStatus } from "@/lib/corrections";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtRelative } from "@/lib/format";
 import { can } from "@/lib/roles";
@@ -35,6 +37,10 @@ export default async function FeedbackPage({ searchParams }: { searchParams: Sea
     .where(and(eq(feedback.status, status), eq(feedback.rating, rating)))
     .orderBy(desc(feedback.createdAt))
     .limit(100);
+
+  // Düzeltilmiş cevapların yayın durumu: "çözüldü" ile "canlıda" aynı şey değildir.
+  const fixes = rows.length ? await db.select().from(corrections).where(inArray(corrections.messageId, rows.map((r) => r.f.messageId))) : [];
+  const fixStatus = fixes.length ? await loadCorrectionStatus(await getMainBot()) : null;
 
   const counts = await db
     .select({ status: feedback.status, n: sql<number>`count(*)::int` })
@@ -78,6 +84,17 @@ export default async function FeedbackPage({ searchParams }: { searchParams: Sea
                 <span>·</span>
                 <span>{fmtRelative(f.createdAt)}</span>
                 {isDemo && <Badge>Örnek</Badge>}
+                {fixStatus &&
+                  fixes
+                    .filter((x) => x.messageId === f.messageId)
+                    .map((x) => {
+                      const b = fixStatus.badge(x.kbSourceId);
+                      return (
+                        <Badge key={x.id} tone={b.tone}>
+                          Düzeltme: {b.label}
+                        </Badge>
+                      );
+                    })}
                 {f.resolvedBy && <span className="ml-auto">{f.resolvedBy}</span>}
               </div>
               <div className="grid gap-3 md:grid-cols-2">

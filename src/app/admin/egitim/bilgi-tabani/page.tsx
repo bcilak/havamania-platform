@@ -1,18 +1,21 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { BookOpen, FileText, Globe, MessageCircle, PenLine, Search, Sparkles } from "lucide-react";
 import { db } from "@/db";
-import { kbSources, type ChatMode, type KbSourceType } from "@/db/schema";
+import { kbSources, providers, type ChatMode, type KbSourceType } from "@/db/schema";
 import { AutoRefresh } from "@/components/admin/AutoRefresh";
-import { ConfirmButton, SubmitButton } from "@/components/client";
+import { ConfirmButton, CountedTextarea, SubmitButton } from "@/components/client";
 import { Badge, btn, EmptyState, Field, Flash, inputCls, Notice, PageHeader, Panel, selectCls, TableWrap, Tabs, td, textareaCls, th } from "@/components/ui";
+import { effectiveEmbedding, embeddingLabel, sameEmbedding } from "@/lib/ai/embedding-freeze";
 import { searchKnowledge } from "@/lib/ai/retrieval";
+import { describeMatch } from "@/lib/ai/retrieval-core";
 import { requireAdmin } from "@/lib/auth";
 import { getMainBot, getPublishedVersion } from "@/lib/bot";
+import { purgeSummary } from "@/lib/kb";
 import { MODES, MODE_META } from "@/lib/bot-config";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtInt, fmtRelative } from "@/lib/format";
 import { getSetting } from "@/lib/settings";
-import { addQa, addUrl, deleteSource, importCms, reprocess, uploadSource } from "./actions";
+import { addQa, addUrl, deleteSource, importCms, purge, reprocess, uploadSource } from "./actions";
 
 export const metadata = { title: "Bilgi tabanı" };
 
@@ -54,13 +57,32 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
   const query = param(sp, "ara");
   const queryMode = (param(sp, "arama_mod") || "genel") as ChatMode;
 
-  const all = await db.select().from(kbSources).where(eq(kbSources.botId, bot.id)).orderBy(desc(kbSources.updatedAt));
+  // Yerine yenisi geçen ve silinen satırlar listede görünmez; yayında kullanılmaya devam edebilirler.
+  const all = await db
+    .select()
+    .from(kbSources)
+    .where(and(eq(kbSources.botId, bot.id), isNull(kbSources.deletedAt), isNull(kbSources.supersededBy)))
+    .orderBy(desc(kbSources.updatedAt));
+  const replacedLive = new Set(
+    (await db.select({ id: kbSources.id, by: kbSources.supersededBy }).from(kbSources).where(eq(kbSources.botId, bot.id)))
+      .filter((r) => r.by && inPublished.has(r.id))
+      .map((r) => r.by as string),
+  );
+  const { stillUsed, purgeable } = await purgeSummary(bot.id);
   const rows = type ? all.filter((s) => s.type === type) : all;
   const counts = Object.fromEntries(Object.keys(TYPE_META).map((t) => [t, all.filter((s) => s.type === t).length]));
   const busy = all.some((s) => s.status === "pending" || s.status === "processing");
+  const readyCount = all.filter((s) => s.status === "ready").length;
   const embedding = await getSetting("embedding");
+  const providerList = await db.select({ id: providers.id, name: providers.name }).from(providers);
+  const liveEmbedding = effectiveEmbedding(published?.embedding, embedding);
+  const liveEmbeddingChanged = Boolean(published) && !sameEmbedding(liveEmbedding, embedding);
   const [{ chunks }] = await db.select({ chunks: sql<number>`count(*)::int` }).from(sql`kb_chunks`).where(sql`bot_id = ${bot.id}`);
-  const hits = query ? await searchKnowledge({ botId: bot.id, mode: queryMode, query, allowedSourceIds: null, topK: 6 }) : [];
+  const hits = query ? await searchKnowledge({ botId: bot.id, mode: queryMode, query, allowedSourceIds: null,
+        topK: 6,
+        minSimilarity: bot.draftConfig.retrievalMinSimilarity,
+        domainStopwords: bot.draftConfig.domainStopwords,
+      }) : [];
 
   return (
     <>
@@ -78,19 +100,36 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
       />
       <Flash sp={sp} />
 
+      {busy && (
+        <div className="mb-5">
+          <Notice>
+            İşleniyor: {fmtInt(readyCount)} / {fmtInt(all.length)} kaynak hazır. Yeniden işlenen yayındaki kaynakların eski içeriği, siz yeni sürüm yayınlayana kadar canlıda kullanılır.
+          </Notice>
+        </div>
+      )}
+
       <div className="mb-5">
         {embedding.providerId && embedding.model ? (
           <Notice>
-            Arama <strong>vektör + Türkçe tam metin</strong> ile yapılıyor ({embedding.model}). Toplam {fmtInt(chunks)} parça.
+            Taslakta arama <strong>vektör + Türkçe tam metin</strong> ile yapılıyor ({embedding.model}). Toplam {fmtInt(chunks)} parça.
+            {liveEmbeddingChanged && (
+              <>
+                {" "}
+                Canlı asistan yeni sürüm yayınlanana kadar <strong>eski modelle</strong> ({embeddingLabel(liveEmbedding, providerList)}) çalışmaya devam eder.
+              </>
+            )}
           </Notice>
         ) : (
           <Notice tone="warn">
-            Embedding modeli seçilmediği için yalnızca <strong>Türkçe tam metin araması</strong> yapılıyor. Anlamca yakın ama farklı kelimelerle sorulan
+            Taslakta embedding modeli seçilmediği için yalnızca <strong>Türkçe tam metin araması</strong> yapılıyor. Anlamca yakın ama farklı kelimelerle sorulan
             soruları yakalamak için{" "}
             <a href="/admin/ayarlar/modeller#embedding" className="font-medium text-accent underline">
               bir embedding modeli seçin
             </a>
-            ; ardından kaynaklar kendiliğinden yeniden işlenir.
+            ; ardından kaynaklar yeniden işlenir.{" "}
+            {liveEmbeddingChanged
+              ? `Canlı asistan yeni sürüm yayınlanana kadar eski modelle (${embeddingLabel(liveEmbedding, providerList)}) çalışmaya devam eder.`
+              : "Canlı asistan, siz yeni sürüm yayınlayana kadar bu değişiklikten etkilenmez."}
           </Notice>
         )}
       </div>
@@ -125,7 +164,7 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
               <input id="q-question" name="question" required defaultValue={param(sp, "soru")} className={inputCls} />
             </Field>
             <Field label="Cevap" htmlFor="q-answer">
-              <textarea id="q-answer" name="answer" rows={3} required className={textareaCls} />
+              <CountedTextarea id="q-answer" name="answer" rows={3} required max={6000} className={textareaCls} />
             </Field>
             <Field label="Geçerli olduğu mod" htmlFor="q-mode">
               <ModeSelect id="q-mode" defaultValue={param(sp, "mod")} />
@@ -158,6 +197,8 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
             {rows.map((s) => {
               const T = TYPE_META[s.type];
               const st = STATUS[s.status];
+              const live = inPublished.has(s.id);
+              const oldLive = replacedLive.has(s.id);
               return (
                 <tr key={s.id}>
                   <td className={td}>
@@ -181,8 +222,13 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
                   <td className={td}>
                     <div className="flex flex-col items-start gap-1">
                       <Badge tone={st.tone}>{st.label}</Badge>
-                      {s.status === "ready" && <Badge tone={inPublished.has(s.id) ? "accent" : "neutral"}>{inPublished.has(s.id) ? "Yayında" : "Yayın bekliyor"}</Badge>}
+                      {s.chunkCount > 0 && (
+                        <Badge tone={live ? "accent" : "neutral"}>{live ? "Yayında" : oldLive ? "Yayında eski hâli, yeni yayın bekliyor" : "Yayın bekliyor"}</Badge>
+                      )}
                       {s.error && <span className="max-w-56 text-xs text-bad">{s.error}</span>}
+                      {s.status === "failed" && s.chunkCount > 0 && <span className="max-w-56 text-xs text-muted">Son işlem başarısız; önceki içerik kullanılmaya devam ediyor.</span>}
+                      {s.status === "failed" && s.chunkCount === 0 && oldLive && <span className="max-w-56 text-xs text-muted">Yayındaki sürüm önceki içeriği kullanmaya devam ediyor.</span>}
+                      {s.warning && <span className="max-w-56 text-xs text-warn">{s.warning}</span>}
                     </div>
                   </td>
                   <td className={`${td} tabular text-right`}>{fmtInt(s.chunkCount)}</td>
@@ -199,7 +245,7 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
                       )}
                       <form action={deleteSource}>
                         <input type="hidden" name="id" value={s.id} />
-                        <ConfirmButton confirmText="Silinsin mi?">Sil</ConfirmButton>
+                        <ConfirmButton confirmText={live || oldLive ? "Yayında; yeni yayına kadar canlıda kalır. Silinsin mi?" : "Silinsin mi?"}>Sil</ConfirmButton>
                       </form>
                     </div>
                   </td>
@@ -214,6 +260,33 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
             Yukarıdan dosya, web sayfası ya da soru-cevap ekleyin.
           </EmptyState>
         </div>
+      )}
+
+      {stillUsed.length > 0 && (
+        <Panel
+          className="mt-6"
+          title="Silinmiş, sürümlerde kayıtlı kaynaklar"
+          description="Taslaktan silindi; yayındaki ya da geri dönülebilecek son 10 sürüm hâlâ kullanıyor. Bir sürümde yer almayan kaynaklar kalıcı silinebilir."
+        >
+          <ul className="mb-3 grid gap-1 text-sm">
+            {stillUsed.map((s) => (
+              <li key={s.id} className="flex flex-wrap items-center gap-2">
+                <span>{s.title}</span>
+                {inPublished.has(s.id) && <Badge tone="accent">Yayında kullanılıyor</Badge>}
+              </li>
+            ))}
+          </ul>
+          {purgeable > 0 && (
+            <form action={purge}>
+              <ConfirmButton confirmText={`${purgeable} kaynak kalıcı silinsin mi?`}>Kullanılmayanları temizle ({purgeable})</ConfirmButton>
+            </form>
+          )}
+        </Panel>
+      )}
+      {stillUsed.length === 0 && purgeable > 0 && (
+        <form action={purge} className="mt-6">
+          <ConfirmButton confirmText={`${purgeable} eski kayıt kalıcı silinsin mi?`}>Eski kayıtları temizle ({purgeable})</ConfirmButton>
+        </form>
       )}
 
       <Panel className="mt-6" title="Aramayı dene" description="Bir soru yazın; asistanın bu soru için hangi içeriği bulacağını görün. Taslaktaki tüm hazır kaynaklarda arar.">
@@ -239,7 +312,7 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
                     <span className="tabular text-muted">{i + 1}.</span>
                     <span className="font-medium">{h.title}</span>
                     <Badge>{TYPE_META[h.type as KbSourceType]?.label ?? h.type}</Badge>
-                    <span className="tabular ml-auto text-xs text-muted">benzerlik {Math.round(h.score * 100)}</span>
+                    <span className="tabular ml-auto text-xs text-muted">{describeMatch(h)}</span>
                   </div>
                   <p className="mt-1.5 line-clamp-3 text-[13px] leading-relaxed text-muted">{h.content}</p>
                 </li>

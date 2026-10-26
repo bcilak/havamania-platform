@@ -1,12 +1,16 @@
 /*
  * Yerel geliştirme için sahte servisler (port 3199):
  *   POST /v1/chat/completions   OpenAI uyumlu model: akış, araç çağırma, kullanım bilgisi
+ *   POST /v1/embeddings         OpenAI biçiminde, kelime-hash tabanlı deterministik vektör
  *   GET  /v1/weather/current    Havamania veri API'si taklitleri
  *   GET  /v1/weather/forecast
  *   GET  /v1/agro/conditions
  *   GET  /v1/fly/route
  * Gerçek API anahtarı olmadan sohbeti uçtan uca denemek içindir. Mesajda "YAVAS"
  * geçerse cevap çok yavaş akar (Durdur düğmesini denemek için).
+ * Hata enjeksiyonu: veri API'sinde q (uçuşta origin) __500 / __timeout (10 sn bekler) /
+ * __badjson ise ilgili hata üretilir. Sahte model, kullanıcı mesajında "#arac:<ad>:<q>"
+ * görürse o aracı o konumla çağırır (q boşsa konumsuz; örn. "#arac:current_weather:__500").
  *   node scripts/mock-services.mjs
  */
 import http from "node:http";
@@ -23,6 +27,14 @@ const DATA = {
 
 function pickTool(text, tools) {
   const names = tools.map((t) => t.function?.name).filter(Boolean);
+  // "#arac:<ad>:<q>": o aracı o konumla çağır (hata yolu testleri). q boşsa konum verilmez.
+  const forced = /#arac:(\w+):(\S*)/.exec(text);
+  if (forced) {
+    const [, name, q] = forced;
+    if (!names.includes(name)) return null;
+    if (name === "flight_weather") return { name, args: { origin: q || "LTFM", destination: "LTAC" } };
+    return { name, args: q ? { location: q } : {} };
+  }
   const want = /türbülans|uçuş|FL\d|rota/i.test(text)
     ? "flight_weather"
     : /ilaç|sula|don|hasat|tarla|ekin/i.test(text)
@@ -44,12 +56,64 @@ function textOf(content) {
   return "";
 }
 
+/** Aynı kelimeleri (ilk 4 harf) paylaşan metinler yüksek kosinüs alır; paylaşmayanlar ~0. */
+const EMBED_DIM = 512;
+const EMBED_SKIP = new Set("ve ile bir bu şu için gibi ama çok daha ne nasıl var yok mı mi mu mü".split(" "));
+function embedText(text) {
+  const v = new Array(EMBED_DIM).fill(0);
+  const words = String(text).toLocaleLowerCase("tr-TR").split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3 && !EMBED_SKIP.has(w));
+  for (const w of words) {
+    let h = 2166136261;
+    for (const ch of w.slice(0, 4)) h = Math.imul(h ^ ch.codePointAt(0), 16777619) >>> 0;
+    v[h % EMBED_DIM] += 1;
+  }
+  const norm = Math.hypot(...v) || 1;
+  return v.map((x) => x / norm);
+}
+
 http
   .createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
+    // URL kaynağı akışını (SSRF korumalı çekim dahil) denemek için basit bir HTML sayfası.
+    if (req.method === "GET" && url.pathname === "/kb-test.html") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      return res.end("<html><head><title>Sahte bilgi sayfası</title></head><body><main><p>Zeytin ağaçlarında zeytinsineği mücadelesi eylül ayında başlar.</p></main></body></html>");
+    }
     if (req.method === "GET" && DATA[url.pathname]) {
+      // Hata enjeksiyonu: q (uçuşta origin) = __500 | __timeout | __badjson
+      const fault = url.searchParams.get("q") ?? url.searchParams.get("origin");
+      if (fault === "__500") {
+        res.writeHead(500, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ error: "sahte sunucu hatası" }));
+      }
+      if (fault === "__timeout") {
+        await sleep(10_000);
+        if (res.destroyed) return;
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end(JSON.stringify({ late: true }));
+      }
+      if (fault === "__badjson") {
+        res.writeHead(200, { "content-type": "application/json" });
+        return res.end("<html>bakımdayız</html>");
+      }
       res.writeHead(200, { "content-type": "application/json" });
       return res.end(JSON.stringify(DATA[url.pathname](url.searchParams)));
+    }
+    if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+      let rawEmb = "";
+      for await (const c of req) rawEmb += c;
+      const input = JSON.parse(rawEmb || "{}").input;
+      const values = (Array.isArray(input) ? input : [input]).map((x) => (typeof x === "string" ? x : ""));
+      const tokens = values.reduce((n, t) => n + Math.max(1, Math.ceil(t.length / 4)), 0);
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(
+        JSON.stringify({
+          object: "list",
+          model: "mock-embed",
+          data: values.map((t, index) => ({ object: "embedding", index, embedding: embedText(t) })),
+          usage: { prompt_tokens: tokens, total_tokens: tokens },
+        }),
+      );
     }
     if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
       res.writeHead(404);

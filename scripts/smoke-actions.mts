@@ -105,6 +105,25 @@ for (let i = 0; i < 20 && status !== "ready"; i++) {
 check("Bilgi tabanı: SSS eklendi ve işlendi", loc.includes("ok=") && status === "ready", `${loc} · ${status}`);
 await sql`delete from kb_sources where question = ${q}`;
 
+/* URL kaynağı: iç ağ adresi reddedilir; mock sayfa (ALLOW_LOCAL_TARGETS=1 ve APP_URL localhost ise açık) işlenir */
+loc = await act("/admin/egitim/bilgi-tabani", "addUrl", { url: "http://169.254.169.254/latest/meta-data", mode: "all" });
+const [metaRow] = await sql`select id from kb_sources where url like 'http://169.254.%'`;
+check("Bilgi tabanı: metadata adresi (SSRF) reddedildi", loc.includes("hata=") && loc.includes("iç ağa") && !metaRow, loc);
+const mockPage = "http://127.0.0.1:3199/kb-test.html";
+loc = await act("/admin/egitim/bilgi-tabani", "addUrl", { url: mockPage, mode: "all" });
+let urlStatus = "";
+for (let i = 0; i < 20 && urlStatus !== "ready" && urlStatus !== "failed"; i++) {
+  await new Promise((r) => setTimeout(r, 300));
+  [{ status: urlStatus } = { status: "" }] = await sql`select status from kb_sources where url = ${mockPage}`;
+}
+const [urlSrc] = await sql`select title, error from kb_sources where url = ${mockPage}`;
+check(
+  "Bilgi tabanı: URL kaynağı eklendi ve işlendi (ön koşul: mock çalışıyor; sunucuda ve .env.local'de ALLOW_LOCAL_TARGETS=1, APP_URL localhost)",
+  loc.includes("ok=") && urlStatus === "ready" && urlSrc?.title === "Sahte bilgi sayfası",
+  `${loc} · ${urlStatus} · ${urlSrc?.error ?? ""}`,
+);
+await sql`delete from kb_sources where url = ${mockPage}`;
+
 /* ---------- 3. Kişilik → yayın → geri alma ---------- */
 const [bot] = await sql`select id, draft_config, published_version_id from bots order by created_at limit 1`;
 const agro = bot.draft_config.modes.agro;
@@ -141,6 +160,106 @@ if (origVersion) {
   const [b4] = await sql`select published_version_id from bots where id = ${bot.id}`;
   check("Yayın: önceki sürüme dönüldü", loc.includes("ok=") && b4.published_version_id === origVersion.id, loc);
 }
+
+/* ---------- 4. Yayın ve eğitim döngüsü doğrulukları ---------- */
+const extraVersionIds: string[] = [];
+const extraSourceQuestions: string[] = [];
+const publishedNow = async () => (await sql`select published_version_id as id from bots where id = ${bot.id}`)[0].id as string;
+const maxNumber = async () => (await sql`select coalesce(max(number), 0)::int as n from bot_versions where bot_id = ${bot.id}`)[0].n as number;
+
+// (a) Sınırı aşan talimat sessizce kesilmez: hata verir, taslak değişmez.
+const draftBefore = (await sql`select draft_config from bots where id = ${bot.id}`)[0].draft_config;
+loc = await act("/admin/egitim/kisilik", "saveMode", {
+  modeId: "agro",
+  enabled: "on",
+  label: agro.label,
+  greeting: agro.greeting,
+  suggestions: agro.suggestions.join("\n"),
+  instructions: "x".repeat(12001),
+  tone: "dengeli",
+  model: "",
+  temperature: "0.3",
+  tools: agro.tools,
+});
+const draftAfter = (await sql`select draft_config from bots where id = ${bot.id}`)[0].draft_config;
+check(
+  "Kişilik: 12001 karakterlik talimat hata verir, taslak değişmez",
+  loc.includes("hata=") && loc.includes("12000") && JSON.stringify(draftBefore) === JSON.stringify(draftAfter),
+  loc,
+);
+
+// (b) Eşzamanlı iki yayın: iki farklı ve ardışık sürüm numarası, hata yok.
+const n0 = await maxNumber();
+const [r1, r2] = await Promise.all([
+  act("/admin/yayin", "publish", { note: "smoke eşzamanlı 1", force: "on" }),
+  act("/admin/yayin", "publish", { note: "smoke eşzamanlı 2", force: "on" }),
+]);
+const raced = await sql`select id, number from bot_versions where bot_id = ${bot.id} and number > ${n0} order by number`;
+extraVersionIds.push(...raced.map((r) => r.id as string));
+check(
+  "Yayın: eşzamanlı iki yayın ardışık sürüm numarası üretir",
+  r1.includes("ok=") && r2.includes("ok=") && raced.length === 2 && raced[0].number === n0 + 1 && raced[1].number === n0 + 2,
+  `${r1} · ${r2} · ${raced.map((r) => r.number).join(",")}`,
+);
+
+// (c) Sağlayıcısı silinmiş sürüme force olmadan geri alınmaz; force ile alınır.
+const [latest] = await sql`select config, kb_source_ids from bot_versions where id = ${await publishedNow()}`;
+const brokenConfig = structuredClone(latest.config);
+brokenConfig.modes.genel.enabled = true;
+brokenConfig.modes.genel.providerId = "00000000-0000-0000-0000-000000000000";
+brokenConfig.modes.genel.model = "silinmis-model";
+const [broken] = await sql`
+  insert into bot_versions (bot_id, number, config, kb_source_ids, note, published_by)
+  values (${bot.id}, ${(await maxNumber()) + 1}, ${sql.json(brokenConfig)}, ${sql.json(latest.kb_source_ids)}, 'smoke bozuk sağlayıcı', 'smoke')
+  returning id`;
+extraVersionIds.push(broken.id as string);
+const publishedBeforeRollback = await publishedNow();
+loc = await act("/admin/yayin", "rollback", { versionId: broken.id });
+check("Yayın: silinmiş sağlayıcılı sürüme force'suz geri alma reddedildi", loc.includes("hata=") && loc.includes("zorla=") && (await publishedNow()) === publishedBeforeRollback, loc);
+loc = await act("/admin/yayin", "rollback", { versionId: broken.id, force: "on" });
+check("Yayın: force ile geri alma çalışır", loc.includes("ok=") && (await publishedNow()) === broken.id, loc);
+
+// (d) Düzeltme döngüsü: kayıt, "Yayın bekliyor" -> yayın -> "Yayında"; bekleyenleri yayına al config'i değiştirmez.
+const cookie = { headers: { cookie: `hm_admin=${token}` } };
+const waitReady = async (question: string) => {
+  let st = "";
+  for (let i = 0; i < 30 && st !== "ready"; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    [{ status: st } = { status: "" }] = await sql`select status from kb_sources where question = ${question}`;
+  }
+  return st;
+};
+const cq = `Smoke düzeltme sorusu ${Date.now()}`;
+extraSourceQuestions.push(cq);
+loc = await act("/admin/egitim/duzeltmeler", "addManualCorrection", { question: cq, answer: "Bu bir test düzeltmesidir.", mode: "all" });
+const cStatus = await waitReady(cq);
+const [corr] = await sql`select c.id, c.kb_source_id from corrections c where c.question = ${cq}`;
+check("Düzeltme: corrections ve kb_sources birlikte yazıldı, kaynak işlendi", loc.includes("ok=") && Boolean(corr?.kb_source_id) && cStatus === "ready", `${loc} · ${cStatus}`);
+let pageHtml = await (await fetch(BASE + "/admin/egitim/duzeltmeler", cookie)).text();
+// Rozet, düzeltmenin sorusundan hemen önceki başlık satırındadır.
+const badgeBefore = (html: string, question: string) => html.slice(Math.max(0, html.indexOf(question) - 1200), Math.max(0, html.indexOf(question)));
+check("Düzeltme: yeni kayıt sayfada 'Yayın bekliyor'", badgeBefore(pageHtml, cq).includes("Yayın bekliyor"), "");
+
+// Bekleyenleri yayına al: config yayındaki sürümle birebir aynı, kaynak listesi düzeltmeyi içerir.
+const prePub = await publishedNow();
+const [prePubRow] = await sql`select config from bot_versions where id = ${prePub}`;
+loc = await act("/admin/yayin", "publishPendingCorrections", {});
+const postPub = await publishedNow();
+const [postPubRow] = await sql`select id, config, kb_source_ids from bot_versions where id = ${postPub}`;
+if (postPub !== prePub) extraVersionIds.push(postPub);
+check(
+  "Düzeltme: 'bekleyenleri yayına al' config'i değiştirmez, düzeltmeyi sürüme ekler",
+  loc.includes("ok=") && postPub !== prePub && JSON.stringify(postPubRow.config) === JSON.stringify(prePubRow.config) && (postPubRow.kb_source_ids as string[]).includes(corr.kb_source_id),
+  loc,
+);
+pageHtml = await (await fetch(BASE + "/admin/egitim/duzeltmeler", cookie)).text();
+check("Düzeltme: yayından sonra sayfada 'Yayında'", badgeBefore(pageHtml, cq).includes("Yayında"), "");
+
+// Kaynakları ve oluşturulan sürümleri temizle; yayındaki sürüm başlangıca dönsün.
+if (origVersion) await sql`update bots set published_version_id = ${origVersion.id} where id = ${bot.id}`;
+await sql`delete from corrections where question = ${cq}`;
+for (const question of extraSourceQuestions) await sql`delete from kb_sources where question = ${question}`;
+for (const id of extraVersionIds) await sql`delete from bot_versions where id = ${id} and id <> ${origVersion?.id ?? "00000000-0000-0000-0000-000000000000"}`;
 
 // Temizlik: taslağı geri yükle; yalnızca bu çalıştırmanın oluşturduğu sürümü sil,
 // o da artık yayında değilse. Denetim kaydına dokunulmaz (kayıtlar silinemez).

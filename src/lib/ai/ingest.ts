@@ -1,15 +1,17 @@
 import { embedMany } from "ai";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import mammoth from "mammoth";
 import { parse } from "node-html-parser";
 import { db } from "@/db";
 import { kbChunks, kbSources } from "@/db/schema";
+import { beginReprocess } from "@/lib/kb";
+import { safeFetchText } from "@/lib/net/safe-fetch";
 import { storage } from "@/lib/storage";
+import { chunkText } from "./chunking";
+import { CLAIMABLE_STATUSES, planIngest, STALE_PROCESSING_MS } from "./ingest-core";
 import { resolveEmbedding } from "./providers";
 
 type SourceRow = typeof kbSources.$inferSelect;
-
-const MAX_CHARS = 400_000;
 
 async function extractPdf(data: Uint8Array): Promise<string> {
   const { extractText, getDocumentProxy } = await import("unpdf");
@@ -19,22 +21,24 @@ async function extractPdf(data: Uint8Array): Promise<string> {
 }
 
 export async function fetchUrlText(url: string): Promise<{ title: string; text: string }> {
-  const res = await fetch(url, {
-    headers: { "user-agent": "HavamaniaBot/1.0 (+bilgi tabanı)" },
-    signal: AbortSignal.timeout(15000),
-    redirect: "follow",
-  });
-  if (!res.ok) throw new Error(`Sayfa ${res.status} döndü.`);
-  const type = res.headers.get("content-type") ?? "";
-  if (!type.includes("html") && !type.includes("text")) throw new Error(`Desteklenmeyen içerik türü: ${type}`);
-  const root = parse(await res.text());
+  // SSRF korumalı çekim: özel ağlara bağlanmaz, yönlendirmeleri yeniden doğrular, 5 MB ve 15 sn sınırı vardır.
+  const { text: html } = await safeFetchText(url);
+  const root = parse(html);
   root.querySelectorAll("script,style,noscript,svg,nav,footer,header,form,iframe").forEach((n) => n.remove());
   const title = root.querySelector("title")?.text.trim() || url;
   const main = root.querySelector("main") ?? root.querySelector("article") ?? root.querySelector("body") ?? root;
   return { title, text: main.structuredText };
 }
 
-async function extract(source: SourceRow): Promise<string> {
+/**
+ * Sahiplik koşulu: satır hâlâ bu işleyicinin aldığı `processing` hâlindedir. Alma anındaki
+ * `updatedAt` belirteçtir; yeniden işleme (beginReprocess), başka bir işleyicin takılı satırı
+ * yeniden alması ya da silme `updatedAt`'i değiştirir ve bu işleyicinin sonucu atılır.
+ */
+const owned = (sourceId: string, claimedAt: Date) =>
+  and(eq(kbSources.id, sourceId), eq(kbSources.status, "processing"), eq(kbSources.updatedAt, claimedAt));
+
+async function extract(source: SourceRow, claimedAt: Date): Promise<string> {
   switch (source.type) {
     case "qa":
     case "correction":
@@ -44,7 +48,7 @@ async function extract(source: SourceRow): Promise<string> {
       const { title, text } = await fetchUrlText(source.url);
       // Başlık henüz adresin kendisiyse sayfanın gerçek başlığıyla değiştir.
       if (source.title === source.url && title) {
-        await db.update(kbSources).set({ title: title.slice(0, 200) }).where(eq(kbSources.id, source.id));
+        await db.update(kbSources).set({ title: title.slice(0, 200) }).where(owned(source.id, claimedAt));
       }
       return text;
     }
@@ -66,51 +70,50 @@ async function extract(source: SourceRow): Promise<string> {
   }
 }
 
-/** Paragraf sınırlarına saygı duyan, ~1000 karakterlik ve 150 karakter örtüşmeli parçalar. */
-export function chunkText(text: string, size = 1000, overlap = 150): string[] {
-  const clean = text.replace(/\r/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
-  if (!clean) return [];
-  const paras = clean.split(/\n\n/);
-  const chunks: string[] = [];
-  let current = "";
-  for (const p of paras) {
-    if (p.length > size) {
-      if (current) chunks.push(current);
-      current = "";
-      for (let i = 0; i < p.length; i += size - overlap) chunks.push(p.slice(i, i + size));
-      continue;
-    }
-    if ((current + "\n\n" + p).length > size && current) {
-      chunks.push(current);
-      current = current.slice(-overlap) + "\n\n" + p;
-    } else {
-      current = current ? `${current}\n\n${p}` : p;
-    }
-  }
-  if (current) chunks.push(current);
-  return chunks.map((c) => c.trim()).filter(Boolean);
-}
-
-/** Kaynağı metne çevirir, parçalar, (yapılandırıldıysa) vektörler ve kaydeder. */
+/**
+ * Kaynağı metne çevirir, parçalar, (yapılandırıldıysa) vektörler ve kaydeder.
+ * Eski parçalar yalnızca yeni parçalar hazırken, tek transaction'da değişir;
+ * hata olursa eski içerik yerinde kalır. Vektörleme hatası kaynağı düşürmez.
+ */
 export async function processSource(sourceId: string): Promise<void> {
-  const [source] = await db.select().from(kbSources).where(eq(kbSources.id, sourceId));
+  // Tek işleyici: durum geçişi atomiktir. Aynı kaynak için ikinci eşzamanlı çağrı
+  // satırı `processing` görür, hiçbir şey almadan çıkar (parçalar çiftlenmez).
+  // Uzun süredir güncellenmeyen `processing` satırı takılı sayılır ve yeniden alınır.
+  // Alma anındaki `updatedAt` sahiplik belirtecidir (bkz. owned): işlem sırasında satır
+  // yeniden işlemeye alınır ya da takılı sayılıp başkası tarafından alınırsa bu işleyicinin
+  // yazmaları ve hata durumu yok sayılır. Bu yüzden 15 dk eşiği güvenlidir; belirteç
+  // yenileme (heartbeat) gerekmez, eşiği aşan iş en kötü ihtimalle boşa çalışmış olur.
+  const claimedAt = new Date();
+  const stale = new Date(claimedAt.getTime() - STALE_PROCESSING_MS);
+  const [source] = await db
+    .update(kbSources)
+    .set({ status: "processing", error: null, warning: null, updatedAt: claimedAt })
+    .where(
+      and(
+        eq(kbSources.id, sourceId),
+        or(inArray(kbSources.status, [...CLAIMABLE_STATUSES]), and(eq(kbSources.status, "processing"), lt(kbSources.updatedAt, stale))),
+      ),
+    )
+    .returning();
   if (!source) return;
-  await db.update(kbSources).set({ status: "processing", error: null, updatedAt: new Date() }).where(eq(kbSources.id, sourceId));
   try {
-    const text = (await extract(source)).slice(0, MAX_CHARS);
-    const pieces = source.type === "qa" || source.type === "correction" ? [text] : chunkText(text);
-    if (!pieces.length) throw new Error("Kaynaktan metin çıkarılamadı.");
-
-    let vectors: number[][] | null = null;
-    let embeddingModel: string | null = null;
+    const rawText = await extract(source, claimedAt);
     const emb = await resolveEmbedding().catch(() => null);
-    if (emb) {
-      const { embeddings } = await embedMany({ model: emb.model, values: pieces, maxParallelCalls: 2 });
-      vectors = embeddings;
-      embeddingModel = emb.id;
-    }
+    const single = source.type === "qa" || source.type === "correction";
+    const plan = await planIngest({
+      rawText,
+      chunk: (t) => (single ? [t] : chunkText(t)),
+      embed: emb ? async (values) => (await embedMany({ model: emb.model, values, maxParallelCalls: 2 })).embeddings : null,
+    });
+    const { text, pieces, vectors, warning } = plan;
+    const embeddingModel = vectors && emb ? emb.id : null;
 
     await db.transaction(async (tx) => {
+      // Kaynak satırı sahiplik koşuluyla kilitlenir: parça silme + ekleme sırayla çalışır ve
+      // yalnızca satırı hâlâ tutan işleyici yazar. Kilit beklerken koşul yeniden değerlendirilir;
+      // arada yeniden işleme/başka bir alma olduysa satır dönmez.
+      const [locked] = await tx.select({ id: kbSources.id }).from(kbSources).where(owned(sourceId, claimedAt)).for("update");
+      if (!locked) return; // sahiplik kaybedildi ya da kaynak kalıcı silindi: sonuç atılır
       await tx.delete(kbChunks).where(eq(kbChunks.sourceId, sourceId));
       await tx.insert(kbChunks).values(
         pieces.map((content, idx) => ({
@@ -125,18 +128,32 @@ export async function processSource(sourceId: string): Promise<void> {
       );
       await tx
         .update(kbSources)
-        .set({ status: "ready", charCount: text.length, chunkCount: pieces.length, embeddingModel, updatedAt: new Date() })
-        .where(eq(kbSources.id, sourceId));
+        .set({ status: "ready", warning, charCount: text.length, chunkCount: pieces.length, embeddingModel, updatedAt: new Date() })
+        .where(owned(sourceId, claimedAt));
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    await db.update(kbSources).set({ status: "failed", error: message.slice(0, 500), updatedAt: new Date() }).where(eq(kbSources.id, sourceId));
+    // Sahiplik kaybedildiyse (ör. başkası bu arada başarıyla bitirdi) hata durumu yazılmaz.
+    await db.update(kbSources).set({ status: "failed", error: message.slice(0, 500), updatedAt: new Date() }).where(owned(sourceId, claimedAt));
   }
 }
 
-/** Embedding modeli değişince tüm kaynakları yeniden işler. */
+/**
+ * Embedding modeli değişince tüm kaynakları yeniden işler. Yayındaki kaynaklar
+ * yeni satırlarda işlenir (bkz. beginReprocess); yeni yayına kadar canlıya girmez.
+ */
 export async function reindexAll(botId: string): Promise<number> {
-  const rows = await db.select({ id: kbSources.id }).from(kbSources).where(and(eq(kbSources.botId, botId)));
-  for (const r of rows) await processSource(r.id);
+  const rows = await db
+    .select({ id: kbSources.id })
+    .from(kbSources)
+    .where(and(eq(kbSources.botId, botId), isNull(kbSources.deletedAt), isNull(kbSources.supersededBy)));
+  for (const r of rows) {
+    try {
+      const id = await beginReprocess(botId, r.id);
+      if (id) await processSource(id);
+    } catch (e) {
+      console.error("[ingest] yeniden işleme başlatılamadı:", e);
+    }
+  }
   return rows.length;
 }

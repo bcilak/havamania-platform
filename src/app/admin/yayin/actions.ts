@@ -4,10 +4,10 @@ import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import { bots } from "@/db/schema";
+import { MODEL_PROBLEM_TEXT } from "@/lib/ai/model-meta";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
-import { getMainBot, publishDraft, rollbackTo } from "@/lib/bot";
-import { MODES } from "@/lib/bot-config";
+import { checkRollback, configModelProblems, getMainBot, PublishError, publishCorrections, publishDraft, rollbackTo } from "@/lib/bot";
 import { encrypt, randomToken } from "@/lib/crypto";
 import { bool, done, fail, str } from "@/lib/form";
 
@@ -16,23 +16,56 @@ const BACK = "/admin/yayin";
 export async function publish(fd: FormData) {
   const admin = await requireAdmin("publish");
   const bot = await getMainBot();
-  const cfg = bot.draftConfig;
-  const missing = MODES.filter((m) => cfg.modes[m].enabled && !(cfg.modes[m].providerId && cfg.modes[m].model));
-  if (missing.length && !bool(fd, "force")) {
-    fail(BACK, `${missing.map((m) => cfg.modes[m].label).join(", ")} için model seçilmemiş. Bu modlar yayında hata verir.`);
+  const force = bool(fd, "force");
+  // Embedding modeli değişmişken işlenmeyi bekleyen kaynak varsa ayrı bir onay gerekir.
+  const forceIndex = bool(fd, "forceIndex");
+  const report = { pendingIndex: 0 };
+  // Model doğrulaması publishDraft içinde, kilit altında okunan config üzerinde yapılır.
+  let v: Awaited<ReturnType<typeof publishDraft>>;
+  try {
+    v = await publishDraft(bot, admin.email, str(fd, "note", 300) || null, { requireModels: !force, requireIndexed: !forceIndex, report });
+  } catch (e) {
+    if (e instanceof PublishError) fail(BACK, e.message);
+    throw e;
   }
-  const v = await publishDraft(bot, admin.email, str(fd, "note", 300) || null);
-  await audit(admin, "bot.publish", `v${v.number}`, { kbSources: v.kbSourceIds.length });
+  // Onayla geçilen sorunlar, yayınlanan (dondurulmuş) config'ten çıkarılır.
+  const problems = force ? (await configModelProblems(v.config, { includeUnset: true })).map((p) => `${p.label}: ${MODEL_PROBLEM_TEXT[p.reason]}`) : [];
+  await audit(admin, "bot.publish", `v${v.number}`, { kbSources: v.kbSourceIds.length, force, problems, forceIndex, pendingIndex: report.pendingIndex });
   revalidatePath("/admin", "layout");
   done(BACK, `v${v.number} yayında. Uygulamadaki kullanıcılar bir sonraki mesajlarında yeni ayarları kullanır.`);
+}
+
+/** Yalnızca bekleyen düzeltme/SSS kaynaklarını yayına alır; kişilik/kural taslağı yayınlanmaz. */
+export async function publishPendingCorrections(fd: FormData) {
+  const admin = await requireAdmin("publish");
+  const back = str(fd, "back") === "duzeltmeler" ? "/admin/egitim/duzeltmeler" : BACK;
+  const bot = await getMainBot();
+  let result: Awaited<ReturnType<typeof publishCorrections>>;
+  try {
+    result = await publishCorrections(bot, admin.email);
+  } catch (e) {
+    if (e instanceof PublishError) fail(back, e.message);
+    throw e;
+  }
+  const { version: v, added } = result;
+  await audit(admin, "bot.publish", `v${v.number}`, { kbSources: v.kbSourceIds.length, onlyCorrections: added });
+  revalidatePath("/admin", "layout");
+  done(back, `v${v.number} yayında: ${added} düzeltme/SSS canlıya alındı. Kişilik ve kural taslağınız yayınlanmadı.`);
 }
 
 export async function rollback(fd: FormData) {
   const admin = await requireAdmin("publish");
   const bot = await getMainBot();
-  const v = await rollbackTo(bot, str(fd, "versionId"));
+  const versionId = str(fd, "versionId");
+  const check = await checkRollback(bot, versionId);
+  if (!check) fail(BACK, "Sürüm bulunamadı.");
+  if (check!.problems.length && !bool(fd, "force")) {
+    // Sayfa, bu sürüm için "yine de geri al" onayını gösterir.
+    fail(`${BACK}?zorla=${check!.version.id}`, `${check!.problems.join("; ")}. Geri alırsanız bu modlar hata verir.`);
+  }
+  const v = await rollbackTo(bot, versionId);
   if (!v) fail(BACK, "Sürüm bulunamadı.");
-  await audit(admin, "bot.rollback", `v${v!.number}`);
+  await audit(admin, "bot.rollback", `v${v!.number}`, { force: bool(fd, "force"), problems: check!.problems });
   revalidatePath("/admin", "layout");
   done(BACK, `v${v!.number} yeniden yayında. Taslağınız değişmedi.`);
 }

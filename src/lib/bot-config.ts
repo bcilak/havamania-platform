@@ -75,6 +75,10 @@ export type BotConfig = {
   photosEnabled: boolean;
   maxPhotoMb: number;
   retrievalTopK: number;
+  /** Kosinüs benzerliği bu değerin altındaki parçalar, kelime eşleşmesi yoksa bağlama girmez. */
+  retrievalMinSimilarity: number;
+  /** Alanda her yerde geçtiği için aramada ayırt edici olmayan kelimeler. */
+  domainStopwords: string[];
 };
 
 export function defaultBotConfig(): BotConfig {
@@ -128,6 +132,8 @@ export function defaultBotConfig(): BotConfig {
     photosEnabled: true,
     maxPhotoMb: 8,
     retrievalTopK: 6,
+    retrievalMinSimilarity: 0.3,
+    domainStopwords: ["hava", "durumu", "durum", "nasıl", "olacak"],
   };
 }
 

@@ -55,14 +55,17 @@ const DEFAULTS: SettingsMap = {
   legal: LEGAL_DEFAULTS,
 };
 
-export async function getSetting<K extends keyof SettingsMap>(key: K): Promise<SettingsMap[K]> {
-  const [row] = await db.select().from(settings).where(eq(settings.key, key));
+/** `db` ya da bir transaction (ayar, başka yazmalarla aynı transaction'da okunup yazılabilsin). */
+type Executor = Pick<typeof db, "select" | "insert">;
+
+export async function getSetting<K extends keyof SettingsMap>(key: K, ex: Executor = db): Promise<SettingsMap[K]> {
+  const [row] = await ex.select().from(settings).where(eq(settings.key, key));
   const value = (row?.value ?? {}) as Partial<SettingsMap[K]>;
   return { ...DEFAULTS[key], ...value };
 }
 
-export async function setSetting<K extends keyof SettingsMap>(key: K, value: SettingsMap[K]) {
-  await db
+export async function setSetting<K extends keyof SettingsMap>(key: K, value: SettingsMap[K], ex: Executor = db) {
+  await ex
     .insert(settings)
     .values({ key, value, updatedAt: new Date() })
     .onConflictDoUpdate({ target: settings.key, set: { value, updatedAt: new Date() } });

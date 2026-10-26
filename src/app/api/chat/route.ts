@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { appUsers, type ChatMode } from "@/db/schema";
 import { ChatError, handleChat } from "@/lib/ai/chat";
+import { parseLocation } from "@/lib/ai/location";
 import { getAdmin } from "@/lib/auth";
 import { getMainBot } from "@/lib/bot";
 import { MODES } from "@/lib/bot-config";
@@ -23,13 +24,7 @@ export async function POST(request: Request) {
   if (!isUuid(conversationId)) return err("Geçersiz konuşma.", 400);
   if (typeof mode !== "string" || !MODES.includes(mode as ChatMode)) return err("Geçersiz mod.", 400);
   const ids = Array.isArray(attachmentIds) ? attachmentIds.filter(isUuid).slice(0, 4) : [];
-  const l = location as { lat?: unknown; lon?: unknown; name?: unknown } | null | undefined;
-  const lat = Number(l?.lat);
-  const lon = Number(l?.lon);
-  const loc =
-    l && Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
-      ? { lat, lon, name: typeof l.name === "string" ? l.name.slice(0, 80) : undefined }
-      : null;
+  const loc = parseLocation(location);
 
   try {
     if (playground === true) {

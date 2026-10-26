@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ShieldCheck } from "lucide-react";
 import { db } from "@/db";
 import { providers } from "@/db/schema";
-import { SubmitButton } from "@/components/client";
+import { CountedTextarea, SubmitButton } from "@/components/client";
 import { checkboxCls, cx, Field, Flash, inputCls, Notice, PageHeader, Panel, selectCls, Tabs, textareaCls } from "@/components/ui";
 import { requireAdmin } from "@/lib/auth";
 import { getMainBot, getPublishedVersion } from "@/lib/bot";
@@ -56,7 +56,7 @@ export default async function PersonaPage({ searchParams }: { searchParams: Sear
           <Panel title="Ortak kurallar" description="Tüm modlarda talimat metninin sonuna eklenir.">
             <div className="grid gap-4">
               <Field label="Kurallar" htmlFor="guardrails">
-                <textarea id="guardrails" name="guardrails" rows={6} defaultValue={draft.guardrails} className={textareaCls} />
+                <CountedTextarea id="guardrails" name="guardrails" rows={6} max={6000} defaultValue={draft.guardrails} className={textareaCls} />
               </Field>
               <Field label="Hata mesajı" htmlFor="fallbackMessage" hint="Model cevap veremediğinde kullanıcıya gösterilir.">
                 <input id="fallbackMessage" name="fallbackMessage" defaultValue={draft.fallbackMessage} className={inputCls} />
@@ -73,6 +73,20 @@ export default async function PersonaPage({ searchParams }: { searchParams: Sear
               </Field>
               <Field label="Bilgi tabanından alınan parça" htmlFor="retrievalTopK">
                 <input id="retrievalTopK" name="retrievalTopK" type="number" min={1} max={15} defaultValue={draft.retrievalTopK} className={inputCls} />
+              </Field>
+              <Field
+                label="En düşük benzerlik"
+                htmlFor="retrievalMinSimilarity"
+                hint="0–1 arası. Bunun altında kalan ve kelime eşleşmesi olmayan parçalar asistana verilmez. Başlangıç değeri 0,30; model sağlayıcısı bağlanınca Test alanıyla ayarlayın."
+              >
+                <input id="retrievalMinSimilarity" name="retrievalMinSimilarity" type="number" step={0.01} min={0} max={1} defaultValue={draft.retrievalMinSimilarity} className={inputCls} />
+              </Field>
+              <Field
+                label="Aramada yok sayılan kelimeler"
+                htmlFor="domainStopwords"
+                hint="Virgül ya da satırla ayırın. Her soruda geçen kelimeler (hava, durumu…) kelime aramasını anlamsızlaştırır."
+              >
+                <textarea id="domainStopwords" name="domainStopwords" rows={2} defaultValue={draft.domainStopwords.join(", ")} className={textareaCls} />
               </Field>
               <Field label="Fotoğraf boyutu sınırı (MB)" htmlFor="maxPhotoMb">
                 <input id="maxPhotoMb" name="maxPhotoMb" type="number" min={1} max={20} defaultValue={draft.maxPhotoMb} className={inputCls} />
@@ -114,7 +128,7 @@ export default async function PersonaPage({ searchParams }: { searchParams: Sear
               </Panel>
 
               <Panel title="Talimat" description="Asistanın rolü, bilmesi gerekenler ve kaçınması gerekenler. Ortak kurallar ve üslup bunun sonuna eklenir.">
-                <textarea name="instructions" rows={10} defaultValue={m.instructions} className={textareaCls} aria-label="Talimat" />
+                <CountedTextarea name="instructions" rows={10} max={12000} defaultValue={m.instructions} className={textareaCls} aria-label="Talimat" />
                 {MODE_DISCLAIMERS[mode] && (
                   <div className="mt-3 flex items-start gap-2 rounded-lg bg-sunken px-3 py-2.5 text-[13px]">
                     <ShieldCheck className="mt-0.5 size-4 shrink-0 text-muted" />
@@ -161,6 +175,12 @@ export default async function PersonaPage({ searchParams }: { searchParams: Sear
                         </select>
                       </Field>
                       {selectedModel && !selectedModel.x.vision && <p className="text-xs text-warn">Bu model fotoğrafları göremez; kullanıcıya bunu söyler.</p>}
+                      {m.providerId && m.model && !selectedModel && (
+                        <p className="text-xs text-warn">Seçili model sağlayıcının listesinde yok; yetenekleri bilinmediği için araç ve görsel kapalı kabul edilir.</p>
+                      )}
+                      {m.tools.length > 0 && (!selectedModel || !selectedModel.x.tools) && m.providerId && m.model && (
+                        <p className="text-xs text-warn">Bu model araç kullanamaz; canlı hava verisi alınamaz.</p>
+                      )}
                       <Field label="Yaratıcılık (temperature)" htmlFor="temperature" hint="Düşük değer daha tutarlı ve kısa cevaplar verir. Hava verisi için 0,2–0,4 önerilir.">
                         <input id="temperature" name="temperature" type="number" step={0.1} min={0} max={1} defaultValue={m.temperature} className={`${inputCls} w-28`} />
                       </Field>

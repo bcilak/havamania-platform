@@ -1,7 +1,10 @@
 import { embed } from "ai";
 import { sqlClient } from "@/db";
 import type { ChatMode } from "@/db/schema";
+import { draftSourceIds } from "@/lib/kb";
+import type { EmbeddingRef } from "./embedding-freeze";
 import { resolveEmbedding } from "./providers";
+import { DEFAULT_DOMAIN_STOPWORDS, DEFAULT_MIN_SIMILARITY, prefixTerms, rankHits, type LexRow, type VecRow } from "./retrieval-core";
 
 export type KnowledgeHit = {
   chunkId: string;
@@ -9,105 +12,93 @@ export type KnowledgeHit = {
   title: string;
   type: string;
   content: string;
+  /** Normalize birleşik puan; yalnızca sıralama içindir. */
   score: number;
+  /** Kosinüs benzerliği; vektör araması yapılmadıysa ya da parça vektör listesinde değilse null. */
+  similarity: number | null;
+  /** Sorgu terimlerinin yeterli kısmı kelime olarak eşleşti. */
+  lexical: boolean;
+  /** 1'den başlayan sıra. */
+  rank: number;
 };
-
-const STOPWORDS = new Set(
-  "ve ile bir bu şu o da de mi mı mu mü için gibi ama fakat çok daha en ne neden nasıl hangi var yok olur olsun ben sen biz siz onlar benim senin bana sana bunu şunu ise ki ya veya hem her şey kadar sonra önce göre".split(
-    " ",
-  ),
-);
-
-/**
- * Türkçe sondan eklemeli; Postgres'in Türkçe kök bulucusu "sulasam" ile
- * "sulama"yı eşleştiremiyor. Bu yüzden her kelimenin ilk 4 harfiyle önek
- * araması yapılır (sula:*), sonuçlar sıralamayla ayıklanır.
- */
-export function buildPrefixQuery(text: string): string | null {
-  const words = text
-    .toLocaleLowerCase("tr-TR")
-    .normalize("NFC")
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
-  const terms = [...new Set(words.map((w) => w.slice(0, Math.min(w.length, w.length <= 4 ? w.length : 4))))];
-  if (!terms.length) return null;
-  return terms.map((t) => `${t}:*`).join(" | ");
-}
-
-type Row = { id: string; source_id: string; content: string; title: string; type: string; priority: number };
 
 export async function searchKnowledge(opts: {
   botId: string;
   mode: ChatMode;
   query: string;
-  /** null = taslak/test: hazır olan tüm kaynaklar. Dizi = yayındaki sürümün kaynakları. */
+  /** null = taslak/test: silinmemiş ve yerine geçeni olmayan kaynaklar. Dizi = yayındaki sürümün kaynakları (silinmiş olsalar da). */
   allowedSourceIds: string[] | null;
   topK: number;
+  /** Bu kosinüs değerinin altındaki vektör sonuçları kelime eşleşmesi yoksa elenir. */
+  minSimilarity?: number;
+  /** Önek sorgusundan çıkarılan, alanda her yerde geçen kelimeler. */
+  domainStopwords?: string[];
+  /**
+   * Yayındaki sürümün dondurulmuş embedding ayarı: sorgu vektörü bu modelle üretilir ve
+   * yalnızca o modelle vektörlenmiş parçalarla karşılaştırılır. Boşsa (taslak/test ya da
+   * eski sürüm) güncel ayar kullanılır.
+   */
+  embedding?: EmbeddingRef | null;
 }): Promise<KnowledgeHit[]> {
   const { botId, mode, query, allowedSourceIds, topK } = opts;
-  if (allowedSourceIds && allowedSourceIds.length === 0) return [];
-  const ids = allowedSourceIds ?? null;
+  const minSimilarity = opts.minSimilarity ?? DEFAULT_MIN_SIMILARITY;
+  // Kaynak durumu aranmaz: parçalar yalnızca başarılı bir işlemin sonunda yazılır,
+  // yeniden işleme ya da başarısız deneme sırasında eski parçalar aranabilir kalır.
+  const ids = allowedSourceIds ?? (await draftSourceIds(botId));
+  if (ids.length === 0) return [];
 
-  const lists: Row[][] = [];
+  const terms = prefixTerms(query, opts.domainStopwords ?? DEFAULT_DOMAIN_STOPWORDS);
+  let lexRows: LexRow[] = [];
+  let vecRows: VecRow[] = [];
 
-  const tsq = buildPrefixQuery(query);
-  if (tsq) {
-    const rows = await sqlClient<Row[]>`
-      select c.id, c.source_id, c.content, s.title, s.type, s.priority
+  if (terms.length) {
+    const tsq = terms.map((t) => `${t}:*`).join(" | ");
+    lexRows = await sqlClient<LexRow[]>`
+      select c.id, c.source_id, c.content, s.title, s.type, s.priority,
+        (select count(*)::int from unnest(${terms}::text[]) as t(term) where c.tsv @@ to_tsquery('simple', t.term || ':*')) as lex_matches
       from kb_chunks c
       join kb_sources s on s.id = c.source_id
       where c.bot_id = ${botId}
         and c.mode in (${mode}, 'all')
-        and s.status = 'ready'
-        and (${ids}::uuid[] is null or c.source_id = any(${ids}::uuid[]))
+        and c.source_id = any(${ids}::uuid[])
         and c.tsv @@ to_tsquery('simple', ${tsq})
       order by ts_rank_cd(c.tsv, to_tsquery('simple', ${tsq})) desc
       limit 20`;
-    lists.push(rows);
   }
 
-  const emb = await resolveEmbedding().catch(() => null);
+  const emb = await resolveEmbedding(allowedSourceIds ? (opts.embedding ?? undefined) : undefined).catch(() => null);
   if (emb) {
     try {
       const { embedding } = await embed({ model: emb.model, value: query });
       const vec = `[${embedding.join(",")}]`;
-      const rows = await sqlClient<Row[]>`
-        select c.id, c.source_id, c.content, s.title, s.type, s.priority
+      vecRows = await sqlClient<VecRow[]>`
+        select c.id, c.source_id, c.content, s.title, s.type, s.priority,
+          (1 - (c.embedding <=> ${vec}::vector))::float8 as similarity
         from kb_chunks c
         join kb_sources s on s.id = c.source_id
         where c.bot_id = ${botId}
           and c.mode in (${mode}, 'all')
-          and s.status = 'ready'
           and c.embedding_model = ${emb.id}
-          and (${ids}::uuid[] is null or c.source_id = any(${ids}::uuid[]))
+          and c.source_id = any(${ids}::uuid[])
         order by c.embedding <=> ${vec}::vector
         limit 20`;
-      lists.push(rows);
     } catch (e) {
       console.error("[retrieval] vektör araması başarısız, tam metinle devam:", e);
     }
   }
 
-  // Reciprocal rank fusion + öncelik (düzeltmeler ve SSS öne çıkar).
-  const scores = new Map<string, { row: Row; score: number }>();
-  for (const list of lists) {
-    list.forEach((row, rank) => {
-      const prev = scores.get(row.id);
-      const add = 1 / (60 + rank);
-      scores.set(row.id, { row, score: (prev?.score ?? 0) + add });
-    });
-  }
-  const max = 2 / 60;
-  return [...scores.values()]
-    .map(({ row, score }) => ({ row, score: score + row.priority * 0.004 }))
-    .sort((a, b) => b.score - a.score)
+  return rankHits({ lexRows, vecRows, termCount: terms.length, minSimilarity })
+    .filter((h) => h.relevant)
     .slice(0, topK)
-    .map(({ row, score }) => ({
-      chunkId: row.id,
-      sourceId: row.source_id,
-      title: row.title,
-      type: row.type,
-      content: row.content,
-      score: Math.min(1, score / max),
+    .map((h, i) => ({
+      chunkId: h.row.id,
+      sourceId: h.row.source_id,
+      title: h.row.title,
+      type: h.row.type,
+      content: h.row.content,
+      score: h.score,
+      similarity: h.similarity,
+      lexical: h.lexical,
+      rank: i + 1,
     }));
 }

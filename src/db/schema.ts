@@ -71,6 +71,12 @@ export type SourceRecord = {
   title: string;
   snippet: string;
   score: number;
+  /** Aşağıdakiler yeni kayıtlarda dolu; eski kayıtlarda yok. */
+  chunkId?: string;
+  /** Kosinüs benzerliği; vektör araması yoksa null. */
+  similarity?: number | null;
+  lexical?: boolean;
+  rank?: number;
 };
 
 /* ---------- Admin ---------- */
@@ -150,6 +156,11 @@ export const botVersions = pgTable(
     config: jsonb("config").$type<BotConfig>().notNull(),
     /** Yayın anında hazır olan bilgi tabanı kaynakları. Yayındaki bot yalnızca bunlarda arar. */
     kbSourceIds: jsonb("kb_source_ids").$type<string[]>().default([]).notNull(),
+    /**
+     * Yayın anındaki embedding ayarı (sağlayıcı + model); sürümün sorgu vektörü bununla üretilir.
+     * providerId null = o anda vektör araması kapalıydı. Sütun NULL ise (eski sürüm) güncel ayar kullanılır.
+     */
+    embedding: jsonb("embedding").$type<{ providerId: string | null; model: string | null }>(),
     note: text("note"),
     publishedBy: text("published_by"),
     publishedAt: timestamp("published_at", { withTimezone: true }).defaultNow().notNull(),
@@ -172,6 +183,12 @@ export const kbSources = pgTable(
     title: text("title").notNull(),
     status: text("status").$type<KbStatus>().default("pending").notNull(),
     error: text("error"),
+    /** Kaynak kullanılabilir ama eksik bir işlem var (ör. vektörleme başarısız). */
+    warning: text("warning"),
+    /** Yumuşak silme: taslaktan çıkar, sürümlerde geçtiği sürece yayında kullanılır. */
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    /** Yeniden işleme: bu satırın yerine geçen yeni satır (FK yok). */
+    supersededBy: uuid("superseded_by"),
     storageKey: text("storage_key"),
     mediaType: text("media_type"),
     url: text("url"),

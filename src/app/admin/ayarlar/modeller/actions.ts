@@ -6,14 +6,14 @@ import { after } from "next/server";
 import { db } from "@/db";
 import { providers, type ProviderKind, type ProviderModel } from "@/db/schema";
 import { reindexAll } from "@/lib/ai/ingest";
+import { KEEP_VERSIONS } from "@/lib/ai/kb-lifecycle";
 import { PROVIDER_KINDS, testModel } from "@/lib/ai/providers";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
-import { getMainBot, getPublishedVersion } from "@/lib/bot";
+import { changeEmbeddingSetting, deleteProviderUnlessFrozen, getMainBot, getPublishedVersion } from "@/lib/bot";
 import { MODES } from "@/lib/bot-config";
 import { encrypt } from "@/lib/crypto";
 import { done, fail, formToObject, str } from "@/lib/form";
-import { getSetting, setSetting } from "@/lib/settings";
 
 const BACK = "/admin/ayarlar/modeller";
 
@@ -86,9 +86,15 @@ export async function deleteProvider(fd: FormData) {
   const published = await getPublishedVersion(bot);
   const inUse = MODES.filter((m) => bot.draftConfig.modes[m].providerId === id || published?.config.modes[m].providerId === id);
   if (inUse.length) fail(`${BACK}#p-${id}`, `Bu sağlayıcı ${inUse.map((m) => bot.draftConfig.modes[m].label).join(", ")} tarafından kullanılıyor. Önce o modlara başka model seçip yayınlayın.`);
-  await db.delete(providers).where(eq(providers.id, id));
-  const emb = await getSetting("embedding");
-  if (emb.providerId === id) await setSetting("embedding", { providerId: null, model: null });
+  // Yayındaki ve geri alınabilir son sürümler, yayın anındaki embedding sağlayıcısıyla sorgu vektörü üretir.
+  // Boş sütunlu (eski) sürümler önce dondurulur, sonra koruma kontrol edilir; hepsi tek transaction'da.
+  const res = await deleteProviderUnlessFrozen(bot.id, id);
+  if (!res.deleted) {
+    fail(
+      `${BACK}#p-${id}`,
+      `Bu sağlayıcı ${res.frozenBy.map((n) => `v${n}`).join(", ")} sürümlerinin embedding modeli olarak kullanılıyor (yayındaki sürüm ve geri alınabilir son ${KEEP_VERSIONS} sürüm). Önce embedding modelini değiştirip yeni sürüm yayınlayın; eski sürümler geri alınabilir listesinden çıkana kadar silinemez.`,
+    );
+  }
   await audit(admin, "provider.delete", id);
   revalidatePath(BACK);
   done(BACK, "Sağlayıcı silindi.");
@@ -106,19 +112,22 @@ export async function runModelTest(fd: FormData) {
 export async function saveEmbedding(fd: FormData) {
   const admin = await requireAdmin("models");
   const [providerId, model] = str(fd, "embedding").split("::");
-  const prev = await getSetting("embedding");
   const next = { providerId: providerId || null, model: model || null };
-  await setSetting("embedding", next);
-  const changed = prev.providerId !== next.providerId || prev.model !== next.model;
+  const bot = await getMainBot();
+  // Ayar ve eski sürümlerin dondurulması aynı transaction'da: canlı sürüm eski modelde kalır.
+  const { changed } = await changeEmbeddingSetting(bot.id, next);
   if (changed) {
-    const bot = await getMainBot();
     after(() => reindexAll(bot.id));
     await audit(admin, "embedding.update", null, next);
   }
   revalidatePath(BACK);
   done(
     `${BACK}#embedding`,
-    changed ? (next.model ? "Embedding modeli değişti. Tüm kaynaklar arka planda yeniden işleniyor." : "Vektör araması kapatıldı; yalnızca tam metin araması kullanılacak.") : "Değişiklik yok.",
+    changed
+      ? next.model
+        ? "Embedding modeli değişti. Tüm kaynaklar arka planda yeni modelle yeniden işleniyor (taslakta). Canlı asistan, yeni sürüm yayınlayana kadar eski modelle çalışmaya devam eder."
+        : "Vektör araması taslakta kapatıldı. Canlı asistan, yeni sürüm yayınlayana kadar eski modelle çalışmaya devam eder."
+      : "Değişiklik yok.",
   );
 }
 
@@ -127,5 +136,5 @@ export async function reindexNow() {
   const bot = await getMainBot();
   after(() => reindexAll(bot.id));
   await audit(admin, "kb.reindex");
-  done(`${BACK}#embedding`, "Yeniden indeksleme başladı. İlerlemeyi Bilgi tabanı sayfasından izleyebilirsiniz.");
+  done(`${BACK}#embedding`, "Yeniden indeksleme başladı. Yeni içerik taslakta hazırlanır, yayındaki sürüm yeni sürüm yayınlanana kadar etkilenmez. İlerlemeyi Bilgi tabanı sayfasından izleyebilirsiniz.");
 }

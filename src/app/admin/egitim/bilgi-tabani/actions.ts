@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { db } from "@/db";
@@ -9,10 +9,12 @@ import { processSource } from "@/lib/ai/ingest";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
 import { getMainBot } from "@/lib/bot";
+import { beginReprocess, purgeSources, removeSource } from "@/lib/kb";
 import { MODES } from "@/lib/bot-config";
 import { landingToText } from "@/lib/cms/flatten";
 import { defaultLandingContent } from "@/lib/cms/schema";
-import { done, fail, str } from "@/lib/form";
+import { done, fail, str, strStrict } from "@/lib/form";
+import { assertPublicUrl, SafeFetchError } from "@/lib/net/safe-fetch";
 import { extFor, newStorageKey, storage } from "@/lib/storage";
 
 const BACK = "/admin/egitim/bilgi-tabani";
@@ -63,10 +65,10 @@ export async function addUrl(fd: FormData) {
   const raw = str(fd, "url", 1000);
   let url: URL;
   try {
-    url = new URL(raw);
-    if (!["http:", "https:"].includes(url.protocol)) throw new Error();
-  } catch {
-    fail(BACK, "Geçerli bir web adresi girin (https://…).");
+    // Eklemede ön doğrulama; asıl koruma çekim sırasında da uygulanır (processSource).
+    url = await assertPublicUrl(raw);
+  } catch (e) {
+    fail(BACK, e instanceof SafeFetchError ? e.message : "Geçerli bir web adresi girin (https://…).");
   }
   const [src] = await db
     .insert(kbSources)
@@ -82,7 +84,7 @@ export async function addQa(fd: FormData) {
   const admin = await requireAdmin("training");
   const bot = await getMainBot();
   const question = str(fd, "question", 1000);
-  const answer = str(fd, "answer", 6000);
+  const answer = strStrict(fd, "answer", 6000, "Cevap", BACK);
   if (!question || !answer) fail(BACK + "#sss", "Soru ve cevap boş olamaz.");
   const [src] = await db
     .insert(kbSources)
@@ -99,11 +101,14 @@ export async function importCms() {
   const bot = await getMainBot();
   const [doc] = await db.select().from(cmsDocuments).where(eq(cmsDocuments.id, "landing"));
   const text = landingToText(doc?.published ?? doc?.draft ?? defaultLandingContent());
-  const [existing] = await db.select().from(kbSources).where(and(eq(kbSources.botId, bot.id), eq(kbSources.type, "cms")));
-  let id: string;
+  const [existing] = await db
+    .select()
+    .from(kbSources)
+    .where(and(eq(kbSources.botId, bot.id), eq(kbSources.type, "cms"), isNull(kbSources.deletedAt), isNull(kbSources.supersededBy)));
+  let id: string | null;
   if (existing) {
-    await db.update(kbSources).set({ answer: text, updatedAt: new Date() }).where(eq(kbSources.id, existing.id));
-    id = existing.id;
+    // Yayındaki site içeriği yerinde değişmez; yeni metin yeni satırda işlenir.
+    id = await beginReprocess(bot.id, existing.id, { answer: text });
   } else {
     const [src] = await db
       .insert(kbSources)
@@ -111,29 +116,48 @@ export async function importCms() {
       .returning();
     id = src.id;
   }
-  after(() => processSource(id));
-  await audit(admin, "kb.create", id, { type: "cms" });
+  if (!id) fail(BACK, "Kaynak bulunamadı.");
+  const sourceId = id!;
+  after(() => processSource(sourceId));
+  await audit(admin, "kb.create", sourceId, { type: "cms" });
   revalidatePath(BACK);
-  done(BACK, "Site içeriği bilgi tabanına aktarıldı.");
+  done(BACK, "Site içeriği bilgi tabanına aktarıldı. Yayındaki asistan, yeni sürüm yayınlanana kadar önceki içeriği kullanır.");
 }
 
 export async function reprocess(fd: FormData) {
-  await requireAdmin("training");
-  const id = str(fd, "id");
-  await db.update(kbSources).set({ status: "pending" }).where(eq(kbSources.id, id));
-  after(() => processSource(id));
+  const admin = await requireAdmin("training");
+  const bot = await getMainBot();
+  const id = await beginReprocess(bot.id, str(fd, "id"));
+  if (!id) fail(BACK, "Kaynak bulunamadı.");
+  after(() => processSource(id!));
+  await audit(admin, "kb.reprocess", id!);
   revalidatePath(BACK);
-  done(BACK, "Yeniden işleniyor.");
+  done(BACK, "Yeniden işleniyor. Yayındaki sürüm sizin yeni sürüm yayınlamanıza kadar önceki içeriği kullanır; önceki içerik silinmez, işlem başarısız olursa o kullanılmaya devam eder.");
 }
 
 export async function deleteSource(fd: FormData) {
   const admin = await requireAdmin("training");
+  const bot = await getMainBot();
   const id = str(fd, "id");
-  const [src] = await db.select().from(kbSources).where(eq(kbSources.id, id));
+  const [src] = await db.select().from(kbSources).where(and(eq(kbSources.id, id), eq(kbSources.botId, bot.id)));
   if (!src) fail(BACK, "Kaynak bulunamadı.");
-  if (src!.storageKey) await storage.remove(src!.storageKey).catch(() => {});
-  await db.delete(kbSources).where(eq(kbSources.id, id));
-  await audit(admin, "kb.delete", id, { title: src!.title });
+  const r = await removeSource(bot.id, id);
+  await audit(admin, "kb.delete", id, { title: src!.title, soft: r?.soft ?? 0 });
   revalidatePath(BACK);
-  done(BACK, `"${src!.title}" silindi. Yayındaki sürüm, yeniden yayınlayana kadar bu kaynağı kullanmaz.`);
+  if (r?.live) {
+    done(BACK, `"${src!.title}" taslaktan silindi. Yayındaki sürüm bu kaynağı kullanmaya devam eder; yeni sürüm yayınlayınca canlıdan da kalkar.`);
+  }
+  if (r?.soft) {
+    done(BACK, `"${src!.title}" taslaktan silindi. Eski sürümlerde kayıtlı olduğu için bu sürümlere geri dönülürse yine kullanılır; "Temizle" ile kalıcı silinebilir.`);
+  }
+  done(BACK, `"${src!.title}" kalıcı olarak silindi.`);
+}
+
+export async function purge() {
+  const admin = await requireAdmin("training");
+  const bot = await getMainBot();
+  const n = await purgeSources(bot.id);
+  await audit(admin, "kb.purge", null, { count: n });
+  revalidatePath(BACK);
+  done(BACK, n ? `${n} kullanılmayan kaynak kalıcı silindi.` : "Silinecek kaynak yok. Yayındaki ve son 10 sürümdeki kaynaklar korunur.");
 }

@@ -18,6 +18,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMode } from "@/db/schema";
 import { cx } from "@/components/ui";
+import { describeMatch } from "@/lib/ai/retrieval-core";
 import { Linkify, Markdown } from "./Markdown";
 
 export type ModeInfo = { id: ChatMode; label: string; greeting: string; suggestions: string[]; disclaimer?: string };
@@ -53,7 +54,7 @@ type Debug = {
   costUsd: number | null;
   unanswered: boolean;
   error: string | null;
-  sources: { title: string; score: number; snippet: string }[];
+  sources: { title: string; score: number; snippet: string; similarity?: number | null; lexical?: boolean }[];
   toolCalls: { name: string; input: unknown; output: unknown }[];
 };
 
@@ -712,7 +713,7 @@ function DebugPanel({ d }: { d: Debug }) {
           <ul className="mt-1.5 grid gap-1.5">
             {d.sources.map((s, i) => (
               <li key={i}>
-                <span className="font-medium">{s.title}</span> <span className="text-muted">· {Math.round(s.score * 100)}</span>
+                <span className="font-medium">{s.title}</span>{describeMatch(s) && <span className="text-muted"> · {describeMatch(s)}</span>}
                 <p className="line-clamp-2 text-muted">{s.snippet}</p>
               </li>
             ))}

@@ -1,29 +1,21 @@
 import { Plug } from "lucide-react";
 import { SubmitButton } from "@/components/client";
-import { btn, checkboxCls, Field, Flash, inputCls, Notice, PageHeader, Panel, selectCls } from "@/components/ui";
-import { callHavamaniaApi } from "@/lib/ai/havamania-api";
+import { checkboxCls, Field, Flash, inputCls, Notice, PageHeader, Panel } from "@/components/ui";
 import { requireAdmin } from "@/lib/auth";
 import { TOOLS, type ToolId } from "@/lib/bot-config";
 import { decryptOrNull, maskSecret } from "@/lib/crypto";
-import { param, type SearchParams } from "@/lib/form";
+import type { SearchParams } from "@/lib/form";
 import { getSetting } from "@/lib/settings";
 import { saveIntegration } from "./actions";
+import { LiveTest } from "./live-test";
+import { SENT_PARAMS } from "./samples";
 
 export const metadata = { title: "Veri entegrasyonu" };
-
-const SAMPLE: Record<ToolId, Record<string, string>> = {
-  current_weather: { q: "Balıkesir" },
-  forecast: { q: "İzmir", days: "3" },
-  agro_conditions: { q: "Konya", crop: "buğday", days: "5" },
-  flight_weather: { origin: "LTFM", destination: "LTAC", flightLevel: "350" },
-};
 
 export default async function IntegrationPage({ searchParams }: { searchParams: SearchParams }) {
   await requireAdmin("integration");
   const sp = await searchParams;
   const cfg = await getSetting("integration");
-  const testTool = param(sp, "test") as ToolId | "";
-  const result = testTool && testTool in TOOLS ? await callHavamaniaApi(testTool, SAMPLE[testTool]) : null;
 
   return (
     <>
@@ -35,7 +27,7 @@ export default async function IntegrationPage({ searchParams }: { searchParams: 
       {!cfg.baseUrl && (
         <div className="mb-5">
           <Notice tone="warn" icon={Plug}>
-            Veri API'si bağlanmadı. Bu durumda asistan güncel veri istendiğinde kullanıcıya veriye şu an erişemediğini söyler ve değer uydurmaz.
+            Veri API&apos;si bağlanmadı. Bu durumda asistan güncel veri istendiğinde kullanıcıya veriye şu an erişemediğini söyler ve değer uydurmaz.
           </Notice>
         </div>
       )}
@@ -62,10 +54,10 @@ export default async function IntegrationPage({ searchParams }: { searchParams: 
               )}
             </div>
           </Panel>
-          <Panel title="Uç noktalar" description="Temel adrese eklenir. Parametreler sorgu dizesi olarak gönderilir.">
+          <Panel title="Uç noktalar" description="Temel adrese eklenir; temel adresteki yol korunur (https://api.x/v2 + /weather → /v2/weather). Parametreler sorgu dizesi olarak gönderilir.">
             <div className="grid gap-4">
               {(Object.keys(TOOLS) as ToolId[]).map((t) => (
-                <Field key={t} label={TOOLS[t].label} htmlFor={`endpoint_${t}`} hint={`Gönderilen: ${Object.keys(SAMPLE[t]).concat(t === "flight_weather" ? ["departureTime"] : ["lat", "lon"]).join(", ")}`}>
+                <Field key={t} label={TOOLS[t].label} htmlFor={`endpoint_${t}`} hint={`Gönderilen: ${SENT_PARAMS[t]}`}>
                   <input id={`endpoint_${t}`} name={`endpoint_${t}`} defaultValue={cfg.endpoints[t]} className={`${inputCls} font-mono text-[13px]`} />
                 </Field>
               ))}
@@ -76,25 +68,8 @@ export default async function IntegrationPage({ searchParams }: { searchParams: 
           </div>
         </form>
 
-        <Panel title="Canlı test" description="Örnek parametrelerle bir istek atar ve dönen cevabı gösterir." className="self-start">
-          <form className="flex gap-2">
-            <select name="test" defaultValue={testTool} className={selectCls} aria-label="Araç">
-              {(Object.keys(TOOLS) as ToolId[]).map((t) => (
-                <option key={t} value={t}>
-                  {TOOLS[t].label}
-                </option>
-              ))}
-            </select>
-            <button className={btn("secondary")}>Dene</button>
-          </form>
-          {result && (
-            <div className="mt-4 grid gap-2">
-              <div className={result.ok ? "text-sm font-medium text-good" : "text-sm font-medium text-bad"}>{result.ok ? "Başarılı" : "Başarısız"}</div>
-              <pre className="max-h-80 overflow-auto rounded-lg bg-sunken p-3 font-mono text-[12px] whitespace-pre-wrap">
-                {JSON.stringify(result.ok ? result.data : result.error, null, 2).slice(0, 4000)}
-              </pre>
-            </div>
-          )}
+        <Panel title="Canlı test" description="Kayıtlı ayarlarla, örnek parametrelerle gerçek bir istek atar ve dönen cevabı gösterir. Sayfa yenilemek istek atmaz; yalnızca “Dene” atar." className="self-start">
+          <LiveTest tools={(Object.keys(TOOLS) as ToolId[]).map((t) => ({ id: t, label: TOOLS[t].label }))} />
         </Panel>
       </div>
     </>

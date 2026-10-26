@@ -111,6 +111,45 @@ await sleep(1500);
 const [stopped] = await sql`select content, output_tokens from messages where conversation_id = ${convStop} and role = 'assistant'`;
 check("Durdurulan cevap yarım metniyle kaydedildi", !!stopped && stopped.content.includes("durdurdu") && stopped.content.startsWith("Test cevab") && stopped.output_tokens > 0, stopped ? `${stopped.content.slice(0, 50)}… · ${stopped.output_tokens} token` : `kayıt yok (${r4.status})`);
 
+/* ---------- 4b. Retrieval: ilgililik eşiği ve "cevapsız" kuralı (e2e setup sahte embedding + "E2E SSS" kurar) ---------- */
+const convNoKb = crypto.randomUUID();
+await chat(s.token, { conversationId: convNoKb, mode: "genel", text: "Blorfkuantum zxwvq mekanizması işliyor mu" });
+await sleep(400);
+const [noKb] = await sql`select unanswered, sources from messages where conversation_id = ${convNoKb} and role = 'assistant'`;
+check("Bilgi tabanında karşılığı olmayan soru: unanswered=true, sources=[]", !!noKb && noKb.unanswered === true && noKb.sources.length === 0, noKb ? `unanswered=${noKb.unanswered} · ${noKb.sources.length} kaynak` : "kayıt yok");
+const convKb = crypto.randomUUID();
+await chat(s.token, { conversationId: convKb, mode: "genel", text: "Zirvepulsar katsayısı nedir?" });
+await sleep(400);
+const [withKb] = await sql`select unanswered, sources from messages where conversation_id = ${convKb} and role = 'assistant'`;
+const top = withKb?.sources?.[0];
+check(
+  "Bilgi tabanındaki SSS bulunuyor: sources[0].similarity dolu, unanswered=false",
+  !!top && typeof top.similarity === "number" && top.similarity > 0.3 && withKb.unanswered === false,
+  top ? `${top.title} · benzerlik ${top.similarity}` : "kaynak yok",
+);
+
+/* ---------- 4c. Canlı veri araçları: hata yolları (mock: #arac:<ad>:<q>, q = __500 | __timeout | __badjson) ---------- */
+// Ayrı oturum: ana kullanıcının dakikalık sınırını harcamasın. Zaman aşımı testi entegrasyon timeoutMs'e (e2e setup: 5 sn) kadar sürer.
+const s2 = await session(`e2e-arac-${Date.now()}`);
+const toolFailures: { label: string; text: string; code: string }[] = [
+  { label: "500", text: "#arac:current_weather:__500 blorfkuantum", code: "http_500" },
+  { label: "zaman aşımı", text: "#arac:current_weather:__timeout blorfkuantum", code: "timeout" },
+  { label: "bozuk JSON", text: "#arac:current_weather:__badjson blorfkuantum", code: "bad_json" },
+  { label: "konumsuz istek", text: "#arac:current_weather: blorfkuantum", code: "no_location" }, // location gönderilmez
+];
+for (const f of toolFailures) {
+  const conv = crypto.randomUUID();
+  const r = await chat(s2.token, { conversationId: conv, mode: "genel", text: f.text });
+  await sleep(500);
+  const [m] = await sql`select tool_calls, unanswered, error, content from messages where conversation_id = ${conv} and role = 'assistant'`;
+  const call = m?.tool_calls?.[0];
+  check(
+    `Araç hatası (${f.label}): akış tamamlandı, output.ok=false, code=${f.code}, unanswered=true`,
+    r.status === 200 && r.tools.includes("current_weather") && r.text.length > 0 && !!m && !m.error && call?.output?.ok === false && call.output.code === f.code && m.unanswered === true,
+    m ? `${r.status} · code=${call?.output?.code} · unanswered=${m.unanswered} · error=${m.error ?? "-"}` : `kayıt yok (${r.status})`,
+  );
+}
+
 /* ---------- 5. Hız sınırı ---------- */
 let limited = 0;
 for (let i = 0; i < 12; i++) {

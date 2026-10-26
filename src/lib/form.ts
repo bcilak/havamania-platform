@@ -1,8 +1,19 @@
 import { redirect } from "next/navigation";
+import { limitMessage } from "./form-limits";
 
 export function str(fd: FormData, name: string, max = 20000): string {
   const v = fd.get(name);
   return typeof v === "string" ? v.trim().slice(0, max) : "";
+}
+
+/** `str` gibi ama sınırı aşan girdiyi sessizce kesmez; kullanıcıya hata gösterip `back` sayfasına döner. */
+export function strStrict(fd: FormData, name: string, max: number, label: string, back: string): string {
+  const v = fd.get(name);
+  // Tarayıcı satır sonlarını CRLF gönderir; sayaçla aynı sayılsın diye LF'ye indirilir.
+  const text = typeof v === "string" ? v.replace(/\r\n/g, "\n").trim() : "";
+  const msg = limitMessage(label, max, text.length);
+  if (msg) fail(back, msg);
+  return text;
 }
 
 export function num(fd: FormData, name: string, fallback: number, min = -Infinity, max = Infinity): number {

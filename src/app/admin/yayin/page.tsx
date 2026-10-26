@@ -4,17 +4,22 @@ import Link from "next/link";
 import { eq } from "drizzle-orm";
 import { ExternalLink, Rocket } from "lucide-react";
 import { db } from "@/db";
-import { kbSources } from "@/db/schema";
+import { kbSources, providers } from "@/db/schema";
 import { ConfirmButton, CopyButton, SubmitButton } from "@/components/client";
 import { Badge, btn, checkboxCls, EmptyState, Field, Flash, inputCls, KeyValue, Notice, PageHeader, Panel, TableWrap, td, th } from "@/components/ui";
+import { effectiveEmbedding, embeddingLabel, pendingIndexOnModelSwitch, sameEmbedding } from "@/lib/ai/embedding-freeze";
+import { diffSources, pendingIndexCount, publishableSourceIds } from "@/lib/ai/kb-lifecycle";
 import { requireAdmin } from "@/lib/auth";
-import { getMainBot, getPublishedVersion, listVersions } from "@/lib/bot";
+import { MODEL_PROBLEM_TEXT } from "@/lib/ai/model-meta";
+import { configModelProblems, getMainBot, getPublishedVersion, listVersions } from "@/lib/bot";
 import { MODES, TONES, type BotConfig } from "@/lib/bot-config";
+import { loadCorrectionStatus } from "@/lib/corrections";
 import { decryptOrNull, maskSecret } from "@/lib/crypto";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtDateTime } from "@/lib/format";
 import { can } from "@/lib/roles";
-import { publish, regenerateSecret, rollback, saveAccess } from "./actions";
+import { getSetting } from "@/lib/settings";
+import { publish, publishPendingCorrections, regenerateSecret, rollback, saveAccess } from "./actions";
 
 export const metadata = { title: "Sürümler ve gömme" };
 
@@ -55,12 +60,30 @@ export default async function PublishPage({ searchParams }: { searchParams: Sear
   const bot = await getMainBot();
   const published = await getPublishedVersion(bot);
   const versions = await listVersions(bot.id);
-  const sources = await db.select({ id: kbSources.id, title: kbSources.title, status: kbSources.status }).from(kbSources).where(eq(kbSources.botId, bot.id));
-  const readyIds = new Set(sources.filter((s) => s.status === "ready").map((s) => s.id));
-  const pubIds = new Set(published?.kbSourceIds ?? []);
-  const added = sources.filter((s) => readyIds.has(s.id) && !pubIds.has(s.id));
-  const removed = [...pubIds].filter((id) => !readyIds.has(id)).length;
+  const sources = await db
+    .select({ id: kbSources.id, title: kbSources.title, deletedAt: kbSources.deletedAt, supersededBy: kbSources.supersededBy, chunkCount: kbSources.chunkCount, status: kbSources.status })
+    .from(kbSources)
+    .where(eq(kbSources.botId, bot.id));
+  // Yayın, publishDraft ile aynı kuralı kullanır: silinmemiş, içeriği olan, yerine geçeni olmayan kaynaklar.
+  const kbDiff = diffSources(published?.kbSourceIds ?? [], publishableSourceIds(sources), sources);
+  const titleOf = (id: string) => sources.find((s) => s.id === id)?.title ?? "silinmiş kaynak";
+  const added = kbDiff.added;
+  const replaced = kbDiff.replaced;
+  const removed = kbDiff.removed.length;
   const changes = diff(published?.config ?? null, bot.draftConfig);
+  // Yayın, o andaki embedding ayarını dondurur. Eski sürüm (kayıt yok) güncel ayarla çalıştığı için fark göstermez.
+  const embeddingNow = await getSetting("embedding");
+  // Model değişmişken yeniden indeksleme bitmeden yayınlanırsa bekleyen kaynaklar canlıda yalnızca tam metinle bulunur; onay gerekir.
+  const pendingIndex = pendingIndexOnModelSwitch({ hasPublished: Boolean(published), frozen: published?.embedding, current: embeddingNow, pending: pendingIndexCount(sources) });
+  if (published) {
+    const was = effectiveEmbedding(published.embedding, embeddingNow);
+    if (!sameEmbedding(was, embeddingNow)) {
+      const names = await db.select({ id: providers.id, name: providers.name }).from(providers);
+      changes.push(`Embedding modeli: ${embeddingLabel(was, names)} → ${embeddingLabel(embeddingNow, names)} (canlı yayınlayınca yeni modele geçer)`);
+    }
+  }
+  const modelProblems = await configModelProblems(bot.draftConfig, { includeUnset: true });
+  const corrections = await loadCorrectionStatus(bot);
   const appUrl = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
   const secret = param(sp, "anahtar") === "goster" && can(admin.role, "users") ? decryptOrNull(bot.tokenSecretEnc) : null;
 
@@ -113,6 +136,7 @@ const token = await new SignJWT({})
                   ["Yayınlayan", published.publishedBy ?? "—"],
                   ["Not", published.note ?? "—"],
                   ["Bilgi tabanı", `${published.kbSourceIds.length} kaynak`],
+                  ["Embedding", published.embedding ? (published.embedding.model ? published.embedding.model : "Vektör araması kapalı") : "Kayıtlı değil (güncel ayar)"],
                 ]}
               />
             </div>
@@ -124,7 +148,7 @@ const token = await new SignJWT({})
         </Panel>
 
         <Panel title="Taslaktaki değişiklikler" description="Yayınla dediğinizde bunlar kullanıcılara ulaşır.">
-          {changes.length || added.length || removed ? (
+          {changes.length || added.length || replaced.length || removed ? (
             <ul className="mb-4 grid gap-1.5 text-sm">
               {changes.map((c) => (
                 <li key={c} className="flex gap-2">
@@ -135,28 +159,73 @@ const token = await new SignJWT({})
               {added.length > 0 && (
                 <li className="flex gap-2">
                   <span className="text-accent">•</span>
-                  Bilgi tabanına {added.length} yeni kaynak: {added.slice(0, 3).map((s) => s.title).join(", ")}
+                  Bilgi tabanına {added.length} yeni kaynak: {added.slice(0, 3).map(titleOf).join(", ")}
                   {added.length > 3 ? "…" : ""}
+                </li>
+              )}
+              {replaced.length > 0 && (
+                <li className="flex gap-2">
+                  <span className="text-accent">•</span>
+                  {replaced.length} kaynak yeniden işlendi, yeni içerik yayına girecek: {replaced.slice(0, 3).map((r) => titleOf(r.to)).join(", ")}
+                  {replaced.length > 3 ? "…" : ""}
                 </li>
               )}
               {removed > 0 && (
                 <li className="flex gap-2">
                   <span className="text-accent">•</span>
-                  {removed} kaynak kaldırılacak
+                  {removed} kaynak canlıdan kalkacak (silinmiş ya da içeriği kalmamış)
                 </li>
               )}
             </ul>
           ) : (
             <p className="mb-4 text-sm text-muted">Taslak, yayındaki sürümle aynı.</p>
           )}
-          <form action={publish} className="flex flex-wrap items-end gap-2">
-            <Field label="Sürüm notu (isteğe bağlı)" htmlFor="note" className="min-w-0 flex-1">
-              <input id="note" name="note" placeholder="Örn. Agro tonu samimi yapıldı" className={inputCls} />
-            </Field>
-            <SubmitButton pendingText="Yayınlanıyor…">
-              <Rocket className="size-4" /> Yayınla
-            </SubmitButton>
+          {modelProblems.length > 0 && (
+            <div className="mb-4">
+              <Notice tone="warn">
+                {modelProblems.map((p) => `${p.label}: ${MODEL_PROBLEM_TEXT[p.reason]}`).join(" · ")}. Bu modlar yayında hata verir.
+              </Notice>
+            </div>
+          )}
+          {pendingIndex > 0 && (
+            <div className="mb-4">
+              <Notice tone="warn">
+                Embedding modeli değişti ve {pendingIndex} kaynak henüz yeni modelle işlenmedi (işleniyor ya da sırada). Şimdi yayınlarsanız bu kaynaklar canlıda yalnızca tam metin aramasıyla bulunur. İlerlemeyi Bilgi tabanı sayfasından izleyebilirsiniz.
+              </Notice>
+            </div>
+          )}
+          <form action={publish} className="grid gap-3">
+            <div className="flex flex-wrap items-end gap-2">
+              <Field label="Sürüm notu (isteğe bağlı)" htmlFor="note" className="min-w-0 flex-1">
+                <input id="note" name="note" placeholder="Örn. Agro tonu samimi yapıldı" className={inputCls} />
+              </Field>
+              <SubmitButton pendingText="Yayınlanıyor…">
+                <Rocket className="size-4" /> Yayınla
+              </SubmitButton>
+            </div>
+            {modelProblems.length > 0 && (
+              <label className="flex items-center gap-2.5 text-sm">
+                <input type="checkbox" name="force" className={checkboxCls} />
+                Modeli olmayan modlar hata verecek; yine de yayınla
+              </label>
+            )}
+            {pendingIndex > 0 && (
+              <label className="flex items-center gap-2.5 text-sm">
+                <input type="checkbox" name="forceIndex" className={checkboxCls} />
+                {pendingIndex} kaynak yeni modelle işlenmedi; yine de yayınla
+              </label>
+            )}
           </form>
+          {published && corrections.pendingCount > 0 && (
+            <form action={publishPendingCorrections} className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+              <p className="min-w-0 flex-1 text-sm text-muted">
+                <strong className="text-ink">{corrections.pendingCount} düzeltme/SSS</strong> yayın bekliyor. Yalnızca bunları, taslaktaki diğer değişiklikleri yayınlamadan canlıya alabilirsiniz.
+              </p>
+              <SubmitButton variant="secondary" pendingText="Yayınlanıyor…">
+                Bekleyen düzeltmeleri yayına al
+              </SubmitButton>
+            </form>
+          )}
         </Panel>
       </div>
 
@@ -186,10 +255,16 @@ const token = await new SignJWT({})
                   <td className={`${td} tabular text-right`}>{v.kbSourceIds.length}</td>
                   <td className={`${td} text-right`}>
                     {v.id !== bot.publishedVersionId && (
-                      <form action={rollback}>
+                      <form action={rollback} className="flex flex-col items-end gap-1.5">
                         <input type="hidden" name="versionId" value={v.id} />
-                        <ConfirmButton variant="secondary" confirmText={`v${v.number} yayınlansın mı?`}>
-                          Bu sürüme dön
+                        {param(sp, "zorla") === v.id && (
+                          <>
+                            <input type="hidden" name="force" value="on" />
+                            <span className="max-w-60 text-xs text-warn">Modeli eksik modlar hata verir.</span>
+                          </>
+                        )}
+                        <ConfirmButton variant="secondary" confirmText={param(sp, "zorla") === v.id ? `Yine de v${v.number}'e dön` : `v${v.number} yayınlansın mı?`}>
+                          {param(sp, "zorla") === v.id ? "Yine de geri al" : "Bu sürüme dön"}
                         </ConfirmButton>
                       </form>
                     )}

@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { providers, type ProviderKind } from "@/db/schema";
 import { ConfirmButton, SubmitButton } from "@/components/client";
 import { Badge, checkboxCls, EmptyState, Field, Flash, inputCls, Notice, PageHeader, Panel, selectCls, textareaCls } from "@/components/ui";
+import { effectiveEmbedding, embeddingLabel, sameEmbedding } from "@/lib/ai/embedding-freeze";
 import { PROVIDER_KINDS } from "@/lib/ai/providers";
 import { requireAdmin } from "@/lib/auth";
 import { getMainBot, getPublishedVersion } from "@/lib/bot";
@@ -27,6 +28,17 @@ export default async function ModelsPage({ searchParams }: { searchParams: Searc
       const p = published?.config.modes[m];
       return (d.providerId === providerId && d.model === model) || (p?.providerId === providerId && p?.model === model);
     }).map((m) => bot.draftConfig.modes[m].label);
+  // Modlarda seçili ama sağlayıcının listesinde olmayan modeller: yetenekleri bilinmez.
+  const unknownModels = (p: { id: string; models: { id: string }[] }) => [
+    ...new Set(
+      MODES.flatMap((m) => [bot.draftConfig.modes[m], published?.config.modes[m]])
+        .filter((c) => c?.providerId === p.id && c.model && !p.models.some((x) => x.id === c.model))
+        .map((c) => c!.model as string),
+    ),
+  ];
+  const liveEmbedding = effectiveEmbedding(published?.embedding, embedding);
+  const liveEmbeddingLabel = embeddingLabel(liveEmbedding, list) + (published?.embedding ? "" : " (güncel ayar; bu sürüm embedding kaydetmeden yayınlanmış)");
+  const liveEmbeddingChanged = !sameEmbedding(liveEmbedding, embedding);
   const embeddable = list.filter((p) => PROVIDER_KINDS[p.kind].embeddings && p.embeddingModels.length);
 
   return (
@@ -49,6 +61,8 @@ export default async function ModelsPage({ searchParams }: { searchParams: Searc
         {list.map((p) => {
           const kind = PROVIDER_KINDS[p.kind];
           const rows = [...p.models, ...Array.from({ length: 2 }, () => null)];
+          const unknown = unknownModels(p);
+          const unpriced = p.models.filter((x) => !x.inputPer1M || !x.outputPer1M);
           return (
             <Panel
               key={p.id}
@@ -124,6 +138,16 @@ export default async function ModelsPage({ searchParams }: { searchParams: Searc
                     </tbody>
                   </table>
                 </div>
+                {unknown.length > 0 && (
+                  <Notice tone="warn">
+                    {unknown.map((id) => `"${id}"`).join(", ")} listede yok: bilinmeyen model, yetenekleri elle işaretleyin. Listeye ekleyip Görsel ve Araç kutularını işaretlemezseniz araç ve görsel kapalı kabul edilir.
+                  </Notice>
+                )}
+                {unpriced.length > 0 && (
+                  <Notice tone="warn">
+                    Fiyat girilmemiş, maliyet 0 görünür: {unpriced.map((x) => x.label || x.id).join(", ")}.
+                  </Notice>
+                )}
                 <p className="text-xs text-muted">
                   Fiyatlar yalnızca panodaki maliyet takibi içindir; sağlayıcınızın güncel fiyat sayfasından girin. Bilinmiyorsa 0 bırakın.
                 </p>
@@ -193,9 +217,16 @@ export default async function ModelsPage({ searchParams }: { searchParams: Searc
         >
           <div className="mb-4">
             <Notice tone="warn">
-              Embedding modelini değiştirmek tüm bilgi tabanının yeniden işlenmesi demektir; eski vektörler yeni modelle karşılaştırılamaz. Değiştirdiğinizde bu otomatik başlar.
+              Embedding modelini değiştirmek tüm bilgi tabanının yeniden işlenmesi demektir; eski vektörler yeni modelle karşılaştırılamaz. Değiştirdiğinizde bu otomatik başlar. Yeni vektörler yeni satırlarda hazırlanır ve taslakta aranır. Canlı asistan, yeni sürüm yayınlayana kadar yayınlandığı andaki eski modelle (eski vektörleriyle) çalışmaya devam eder; geçiş yeni yayınla olur. Bu sürede eski modelin sağlayıcısı silinemez. Vektörleme hatası kaynağı düşürmez, kaynak kelime aramasıyla kullanılabilir kalır.
             </Notice>
           </div>
+          {published && (
+            <p className="mb-4 text-sm text-muted">
+              Canlıda (v{published.number}) kullanılan embedding:{" "}
+              <strong className="text-ink">{liveEmbeddingLabel}</strong>
+              {liveEmbeddingChanged && " — taslaktaki ayardan farklı; yeni sürüm yayınlayınca geçilir."}
+            </p>
+          )}
           <form action={saveEmbedding} className="flex flex-wrap items-end gap-2">
             <Field label="Model" htmlFor="embedding" className="min-w-64">
               <select id="embedding" name="embedding" defaultValue={embedding.providerId && embedding.model ? `${embedding.providerId}::${embedding.model}` : ""} className={selectCls}>

@@ -3,11 +3,14 @@ import { notFound } from "next/navigation";
 import { asc, eq, inArray } from "drizzle-orm";
 import { Bot, ChevronLeft, CircleAlert, Flag, PenLine, ThumbsDown, ThumbsUp, User, Wrench, BookOpen } from "lucide-react";
 import { db } from "@/db";
-import { appUsers, attachments, conversations, feedback, messages } from "@/db/schema";
-import { ConfirmButton, SubmitButton } from "@/components/client";
+import { appUsers, attachments, conversations, corrections, feedback, messages } from "@/db/schema";
+import { ConfirmButton, CountedTextarea, SubmitButton } from "@/components/client";
 import { Badge, btn, cx, Field, Flash, KeyValue, ModeBadge, PageHeader, Panel, selectCls, textareaCls } from "@/components/ui";
+import { describeMatch } from "@/lib/ai/retrieval-core";
 import { requireAdmin } from "@/lib/auth";
+import { getMainBot } from "@/lib/bot";
 import { MODE_DISCLAIMERS, MODE_META } from "@/lib/bot-config";
+import { loadCorrectionStatus } from "@/lib/corrections";
 import type { SearchParams } from "@/lib/form";
 import { fmtDateTime, fmtInt, fmtTime, fmtUsd, maskId, PLATFORM_LABEL } from "@/lib/format";
 import { can } from "@/lib/roles";
@@ -36,6 +39,8 @@ export default async function ConversationDetail({ params, searchParams }: { par
   const ids = msgs.map((m) => m.id);
   const photos = ids.length ? await db.select().from(attachments).where(inArray(attachments.messageId, ids)) : [];
   const fbs = ids.length ? await db.select().from(feedback).where(inArray(feedback.messageId, ids)) : [];
+  const fixes = ids.length ? await db.select().from(corrections).where(inArray(corrections.messageId, ids)) : [];
+  const fixStatus = fixes.length ? await loadCorrectionStatus(await getMainBot()) : null;
 
   const pii = can(admin.role, "pii");
   const canTrain = can(admin.role, "training");
@@ -74,6 +79,7 @@ export default async function ConversationDetail({ params, searchParams }: { par
           {msgs.map((m, i) => {
             const own = photos.filter((p) => p.messageId === m.id);
             const fb = fbs.find((f) => f.messageId === m.id);
+            const fixBadges = fixStatus ? fixes.filter((x) => x.messageId === m.id).map((x) => ({ id: x.id, ...fixStatus.badge(x.kbSourceId) })) : [];
             const prevUser = m.role === "assistant" ? [...msgs.slice(0, i)].reverse().find((x) => x.role === "user") : null;
             const isUser = m.role === "user";
             return (
@@ -97,6 +103,11 @@ export default async function ConversationDetail({ params, searchParams }: { par
                       </span>
                     )}
                     {m.unanswered && <Badge tone="warn">Karşılığı bulunamadı</Badge>}
+                    {fixBadges.map((b) => (
+                      <Badge key={b.id} tone={b.tone}>
+                        Düzeltme: {b.label}
+                      </Badge>
+                    ))}
                     {fb && (
                       <Badge tone={fb.rating === 1 ? "good" : "bad"} className="ml-auto">
                         {fb.rating === 1 ? <ThumbsUp className="size-3" /> : <ThumbsDown className="size-3" />}
@@ -173,7 +184,7 @@ export default async function ConversationDetail({ params, searchParams }: { par
                               <li key={si} className="px-3 py-2.5 text-sm">
                                 <div className="flex items-center gap-2">
                                   <span className="font-medium">{s.title}</span>
-                                  <span className="tabular ml-auto text-xs text-muted">benzerlik {Math.round(s.score * 100)}</span>
+                                  <span className="tabular ml-auto text-xs text-muted">{describeMatch(s)}</span>
                                 </div>
                                 <p className="mt-1 line-clamp-3 text-[13px] text-muted">{s.snippet}</p>
                               </li>
@@ -194,7 +205,7 @@ export default async function ConversationDetail({ params, searchParams }: { par
                               <textarea id={`q-${m.id}`} name="question" rows={2} defaultValue={prevUser?.content ?? ""} required className={textareaCls} />
                             </Field>
                             <Field label="Doğru cevap" htmlFor={`a-${m.id}`}>
-                              <textarea id={`a-${m.id}`} name="correct" rows={4} required className={textareaCls} />
+                              <CountedTextarea id={`a-${m.id}`} name="correct" rows={4} required max={4000} className={textareaCls} />
                             </Field>
                             <div className="flex flex-wrap items-end justify-between gap-3">
                               <Field label="Geçerli olduğu modlar" htmlFor={`s-${m.id}`}>

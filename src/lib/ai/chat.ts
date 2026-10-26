@@ -12,12 +12,15 @@ import {
   type ToolCallRecord,
 } from "@/db/schema";
 import { normalizeBotConfig, type BotConfig } from "@/lib/bot-config";
-import { getPublishedVersion, type BotRow } from "@/lib/bot";
+import { getPublishedVersion, type BotRow, type BotVersionRow } from "@/lib/bot";
 import { storage } from "@/lib/storage";
 import { buildInstructions } from "./prompt";
 import { costOf, ModelConfigError, resolveModel } from "./providers";
 import { searchKnowledge, type KnowledgeHit } from "./retrieval";
-import { buildTools, type UserLocation } from "./tools";
+import { isUnanswered } from "./retrieval-core";
+import { buildTools } from "./tools";
+import type { UserLocation } from "./location";
+import { redactToolStream } from "./ui-stream";
 
 type AppUserRow = typeof appUsers.$inferSelect;
 type AttachmentRow = typeof attachments.$inferSelect;
@@ -79,6 +82,7 @@ export async function handleChat(input: ChatInput): Promise<Response> {
   /* 1. Hangi ayarlar: taslak (test alanı) mı, yayındaki sürüm mü? */
   let config: BotConfig;
   let allowedSourceIds: string[] | null = null;
+  let frozenEmbedding: BotVersionRow["embedding"] = null;
   let versionNumber: number | null = null;
   if (input.useDraft) {
     config = normalizeBotConfig(bot.draftConfig);
@@ -87,6 +91,7 @@ export async function handleChat(input: ChatInput): Promise<Response> {
     if (!v) throw new ChatError("Asistan henüz yayınlanmadı.", 503);
     config = v.config;
     allowedSourceIds = v.kbSourceIds;
+    frozenEmbedding = v.embedding;
     versionNumber = v.number;
   }
   const modeCfg = config.modes[input.mode];
@@ -186,7 +191,16 @@ export async function handleChat(input: ChatInput): Promise<Response> {
   let hits: KnowledgeHit[] = [];
   if (query) {
     try {
-      hits = await searchKnowledge({ botId: bot.id, mode: input.mode, query, allowedSourceIds, topK: config.retrievalTopK });
+      hits = await searchKnowledge({
+        botId: bot.id,
+        mode: input.mode,
+        query,
+        allowedSourceIds,
+        embedding: frozenEmbedding,
+        topK: config.retrievalTopK,
+        minSimilarity: config.retrievalMinSimilarity,
+        domainStopwords: config.domainStopwords,
+      });
     } catch (e) {
       console.error("[chat] bilgi tabanı araması başarısız:", e);
     }
@@ -216,11 +230,15 @@ export async function handleChat(input: ChatInput): Promise<Response> {
     title: h.title,
     snippet: h.content.slice(0, 280),
     score: Math.round(h.score * 100) / 100,
+    chunkId: h.chunkId,
+    similarity: h.similarity === null ? null : Math.round(h.similarity * 1000) / 1000,
+    lexical: h.lexical,
+    rank: h.rank,
   }));
   const modelLabel = `${resolved.provider.kind}/${resolved.meta.id}`;
   let saved = false;
 
-  const saveAssistant = async (content: string, toolCalls: ToolCallRecord[], inTok: number, outTok: number, error: string | null) => {
+  const saveAssistant = async (content: string, toolCalls: ToolCallRecord[], inTok: number, outTok: number, error: string | null, aborted = false) => {
     if (saved) return;
     saved = true;
     const cost = costOf(resolved.meta, inTok, outTok);
@@ -231,7 +249,7 @@ export async function handleChat(input: ChatInput): Promise<Response> {
       content: content || (error ? config.fallbackMessage : ""),
       toolCalls,
       sources,
-      unanswered: !error && sources.length === 0 && toolCalls.length === 0,
+      unanswered: isUnanswered({ relevantHits: sources.length, toolCalls, error, aborted }),
       model: modelLabel,
       inputTokens: inTok,
       outputTokens: outTok,
@@ -283,7 +301,7 @@ export async function handleChat(input: ChatInput): Promise<Response> {
       const inTok = Math.max(e.steps.reduce((a, s) => a + (s.usage.inputTokens ?? 0), 0), Math.ceil(promptChars / 4));
       const outTok = Math.max(e.steps.reduce((a, s) => a + (s.usage.outputTokens ?? 0), 0), Math.ceil(streamed.length / 4));
       const text = streamed.trim();
-      await saveAssistant(text ? `${text}\n\n(Kullanıcı cevabı durdurdu.)` : "(Kullanıcı cevabı durdurdu.)", toolCalls, inTok, outTok, null);
+      await saveAssistant(text ? `${text}\n\n(Kullanıcı cevabı durdurdu.)` : "(Kullanıcı cevabı durdurdu.)", toolCalls, inTok, outTok, null, true);
     },
     onError: async ({ error }) => {
       console.error("[chat] model hatası:", error);
@@ -291,12 +309,12 @@ export async function handleChat(input: ChatInput): Promise<Response> {
     },
   });
 
-  return createUIMessageStreamResponse({
-    stream: toUIMessageStream({
-      stream: result.stream,
-      generateMessageId: () => assistantId,
-      sendReasoning: false,
-      onError: () => config.fallbackMessage,
-    }),
+  const uiStream = toUIMessageStream({
+    stream: result.stream,
+    generateMessageId: () => assistantId,
+    sendReasoning: false,
+    onError: () => config.fallbackMessage,
   });
+  // Son kullanıcı (widget, mobil köprü) araç girdi/çıktısını ve ham hata metnini görmez; yalnızca test alanı görür.
+  return createUIMessageStreamResponse({ stream: input.platform === "playground" ? uiStream : redactToolStream(uiStream) });
 }
