@@ -53,6 +53,7 @@ export const AUDIT_LABELS: Record<string, string> = {
   "photo.hide": "Fotoğrafı gizledi",
   "photo.show": "Fotoğrafı yeniden gösterdi",
   "photo.delete": "Fotoğrafı sildi",
+  "photo.sanitize": "Fotoğraf meta verisi temizliğini çalıştırdı",
   "cms.save": "Site içeriğini kaydetti",
   "cms.publish": "Site içeriğini yayınladı",
   "media.upload": "Medya yükledi",

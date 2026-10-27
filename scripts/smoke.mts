@@ -6,8 +6,10 @@
  */
 import { SignJWT } from "jose";
 import postgres from "postgres";
+import sharp from "sharp";
 import { stripCitations } from "../src/lib/ai/citations";
 import { isFollowUp } from "../src/lib/ai/retrieval-core";
+import { gpsJpeg } from "../src/lib/image-fixtures";
 import { storage } from "../src/lib/storage";
 
 const BASE = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
@@ -110,6 +112,98 @@ const svg = new FormData();
 svg.append("file", new Blob(["<svg/>"], { type: "image/svg+xml" }), "x.svg");
 const upBad = await fetch(BASE + "/api/widget/upload", { method: "POST", headers: auth, body: svg });
 check("Fotoğraf yükleme: SVG reddediliyor", upBad.status === 400, `${upBad.status}`);
+
+// Meta veri temizliği: yönlü, GPS'li JPEG yüklenir; indirilen dosyada EXIF/GPS kalmamalı, yön uygulanmış olmalı.
+const SMOKE_MARKER = "HM-SMOKE-MARKER";
+const gpsFd = new FormData();
+gpsFd.append("file", new Blob([new Uint8Array(await gpsJpeg({ width: 64, height: 32, orientation: 6, marker: SMOKE_MARKER }))], { type: "image/jpeg" }), "gps.jpg");
+const gpsUp = await fetch(BASE + "/api/widget/upload", { method: "POST", headers: auth, body: gpsFd });
+const gpsUpj = await gpsUp.json();
+check("Fotoğraf yükleme: GPS'li JPEG kabul ediliyor", gpsUp.ok && typeof gpsUpj.id === "string", `${gpsUp.status}`);
+const [gpsRow] = gpsUp.ok ? await sql`select storage_key, media_type, size from attachments where id = ${gpsUpj.id}` : [];
+if (gpsRow) {
+  const dl = await fetch(`${BASE}/api/files/${gpsRow.storage_key}`, { headers: { cookie } });
+  const body = Buffer.from(await dl.arrayBuffer());
+  const m = await sharp(body).metadata();
+  check("Fotoğraf: indirilen dosyada EXIF/XMP/ICC yok, JPEG olarak sunuluyor", dl.ok && dl.headers.get("content-type") === "image/jpeg" && !m.exif && !m.xmp && !m.icc, `${dl.status} ${dl.headers.get("content-type")}`);
+  check("Fotoğraf: yön uygulanmış (64x32 -> 32x64)", m.width === 32 && m.height === 64, `${m.width}x${m.height}`);
+  check("Fotoğraf: gövdede GPS/EXIF izi ve işaretçi metin yok", !body.includes("Exif\0\0") && !body.includes(SMOKE_MARKER), "");
+  check("Fotoğraf: kayıtlı boyut ve tür çıktıya eşit", gpsRow.size === body.length && gpsRow.media_type === "image/jpeg", `${gpsRow.size} / ${body.length}`);
+}
+
+const heicFd = new FormData();
+heicFd.append("file", new Blob([new Uint8Array(Buffer.from("\0\0\0\x18ftypheic\0\0\0\0mif1heic", "latin1"))], { type: "image/heic" }), "x.heic");
+const heicUp = await fetch(BASE + "/api/widget/upload", { method: "POST", headers: auth, body: heicFd });
+const heicUpj = await heicUp.json().catch(() => ({}));
+check("Fotoğraf yükleme: HEIC anlaşılır uyarıyla reddediliyor", heicUp.status === 400 && /HEIC/.test(heicUpj.error ?? ""), `${heicUp.status} ${heicUpj.error ?? ""}`);
+
+const fakeSvg = new FormData();
+fakeSvg.append("file", new Blob(["<svg/>"], { type: "image/png" }), "x.png");
+const fakeSvgUp = await fetch(BASE + "/api/widget/upload", { method: "POST", headers: auth, body: fakeSvg });
+check("Fotoğraf yükleme: türü png beyan edilen SVG baytları reddediliyor", fakeSvgUp.status === 400, `${fakeSvgUp.status}`);
+
+const svgName = new FormData();
+svgName.append("file", new Blob([png], { type: "image/png" }), "x.svg");
+const svgNameUp = await fetch(BASE + "/api/widget/upload", { method: "POST", headers: auth, body: svgName });
+const svgNameUpj = await svgNameUp.json().catch(() => ({}));
+const [svgNameRow] = svgNameUp.ok ? await sql`select storage_key from attachments where id = ${svgNameUpj.id}` : [];
+check("Fotoğraf yükleme: adı .svg olan gerçek PNG .png anahtarıyla saklanıyor", Boolean(svgNameRow?.storage_key.endsWith(".png")), `${svgNameUp.status} ${svgNameRow?.storage_key ?? ""}`);
+
+// Savunma katmanı: temizlenmemiş eski dosya doğrudan depoya yazılsa bile sunulurken temizlenir.
+const legacyKey = `photos/smoke/${crypto.randomUUID()}.jpg`;
+await storage.put(legacyKey, new Uint8Array(await gpsJpeg({ marker: SMOKE_MARKER })), "image/jpeg");
+const legacy = await fetch(`${BASE}/api/files/${legacyKey}`, { headers: { cookie } });
+const legacyBody = Buffer.from(await legacy.arrayBuffer());
+const legacyMeta = legacy.ok ? await sharp(legacyBody).metadata() : null;
+check("Dosya: eski GPS'li fotoğraf sunulurken temizleniyor", Boolean(legacyMeta) && !legacyMeta!.exif && !legacyBody.includes(SMOKE_MARKER), `${legacy.status}`);
+await storage.remove(legacyKey).catch(() => {});
+
+// Uzantı yanıltıcıysa da (.pdf anahtarlı gerçek JPEG) içerik koklanıp temizlenir; Content-Type içerikten gelir.
+const pdfKey = `photos/smoke/${crypto.randomUUID()}.pdf`;
+await storage.put(pdfKey, new Uint8Array(await gpsJpeg({ marker: SMOKE_MARKER })), "application/pdf");
+const pdfDl = await fetch(`${BASE}/api/files/${pdfKey}`, { headers: { cookie } });
+const pdfBody = Buffer.from(await pdfDl.arrayBuffer());
+const pdfMeta = pdfDl.ok ? await sharp(pdfBody).metadata() : null;
+check(
+  "Dosya: .pdf anahtarlı GPS'li JPEG EXIF'siz iniyor (image/jpeg, nosniff)",
+  Boolean(pdfMeta) && !pdfMeta!.exif && !pdfBody.includes("Exif\x00\x00") && !pdfBody.includes(SMOKE_MARKER) && pdfDl.headers.get("content-type") === "image/jpeg" && pdfDl.headers.get("x-content-type-options") === "nosniff",
+  `${pdfDl.status} ${pdfDl.headers.get("content-type")}`,
+);
+await storage.remove(pdfKey).catch(() => {});
+
+// Kanonik olmayan anahtar izin ve temizlik denetimini atlatamaz: "photos" izni olmayan editör rolüyle de, izinli rolle de reddedilir.
+const editorToken = await new SignJWT({ role: "editor", email: admin.email, name: admin.name })
+  .setProtectedHeader({ alg: "HS256" })
+  .setSubject(admin.id)
+  .setAudience("admin")
+  .setIssuedAt()
+  .setExpirationTime("10m")
+  .sign(new TextEncoder().encode(process.env.SESSION_SECRET!));
+const editorCookie = `hm_admin=${editorToken}`;
+const canonId = crypto.randomUUID();
+const canonKey = `photos/smoke/${canonId}.jpg`;
+await storage.put(canonKey, new Uint8Array(await gpsJpeg({ marker: SMOKE_MARKER })), "image/jpeg");
+const editorOk = await fetch(`${BASE}/api/files/${canonKey}`, { headers: { cookie: editorCookie } });
+check("Dosya: editör rolü photos/ anahtarını göremiyor (403)", editorOk.status === 403, `${editorOk.status}`);
+const tricks = [
+  `.%2Fphotos%2Fsmoke%2F${canonId}.jpg`,
+  `kb%2F..%2Fphotos%2Fsmoke%2F${canonId}.jpg`,
+  `photos/smoke%2F..%2Fsmoke%2F${canonId}.jpg`,
+  `photos%2Fsmoke%2F${canonId}.jpg`,
+];
+for (const [who, c] of [["editör", editorCookie], ["süper admin", cookie]] as const) {
+  const bad: string[] = [];
+  for (const t of tricks) {
+    const r = await fetch(`${BASE}/api/files/${t}`, { headers: { cookie: c } });
+    const body = Buffer.from(await r.arrayBuffer());
+    if (r.ok || body.includes(SMOKE_MARKER)) bad.push(`${t} -> ${r.status}`);
+  }
+  check(`Dosya: kanonik olmayan anahtarlar reddediliyor (${who})`, bad.length === 0, bad.join("; "));
+}
+// Büyük harfli önek (büyük/küçük harf duyarsız dosya sistemleri) editör için izni atlatamaz.
+const upper = await fetch(`${BASE}/api/files/Photos/smoke/${canonId}.jpg`, { headers: { cookie: editorCookie } });
+check("Dosya: Photos/ büyük harfli önekle editör izni atlatılamıyor", !upper.ok, `${upper.status}`);
+await storage.remove(canonKey).catch(() => {});
 
 const chat = await fetch(BASE + "/api/chat", {
   method: "POST",

@@ -21,6 +21,9 @@ export const LIMITS = {
   chatPerMinPerIp: envInt("RATE_LIMIT_CHAT_PER_MIN", 30),
   chatPerMinPerUser: envInt("RATE_LIMIT_CHAT_PER_USER_PER_MIN", 8),
   uploadPerMin: envInt("RATE_LIMIT_UPLOAD_PER_MIN", 10),
+  /** Oturumsuz (imzalı bağlantılı) dosya istekleri: IP başına ve dosya anahtarı başına. Fotoğraf sunumu yeniden kodlama yapabilir. */
+  fileSignedPerMinPerIp: envInt("RATE_LIMIT_FILE_SIGNED_PER_MIN", 120),
+  fileSignedPerMinPerKey: envInt("RATE_LIMIT_FILE_SIGNED_PER_KEY_PER_MIN", 30),
   feedbackPerMin: envInt("RATE_LIMIT_FEEDBACK_PER_MIN", 30),
   /** Prompt önizleme embedding çağrısı yapar (maliyetli); IP ve yönetici başına ayrı sayılır. */
   promptPreviewPerMin: envInt("RATE_LIMIT_PROMPT_PREVIEW_PER_MIN", 20),
@@ -45,10 +48,13 @@ export function allow(key: string, perMinute: number): boolean {
   return ok;
 }
 
-/** Ters vekil (nginx, Cloudflare) arkasında gerçek istemci IP'si. */
+/**
+ * Ters vekil (Apache) arkasında gerçek istemci IP'si. Vekil, gördüğü IP'yi listenin SONUNA ekler;
+ * baştaki değerleri istemci uydurabilir, bu yüzden en sağdaki alınır.
+ */
 export function clientIp(request: Request): string {
   const xf = request.headers.get("x-forwarded-for");
-  return xf?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || "yerel";
+  return xf?.split(",").at(-1)?.trim() || request.headers.get("x-real-ip") || "yerel";
 }
 
 export function tooMany() {

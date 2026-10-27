@@ -128,7 +128,7 @@ Satırların nedeni:
 2. Tarayıcıda **https**://havamania.com açın. Sertifika uyarısı çıkması normal; henüz Virtualmin'in geçici sertifikası var. "Gelişmiş › Devam et" deyin.
    - Landing açılmalı.
    - `/admin` adresinde `ADMIN_EMAIL` / `ADMIN_PASSWORD` ile giriş yapılabilmeli. Giriş çerezi yalnızca HTTPS'te çalışır, http ile denemeyin.
-3. Sunucuda duman testi (36/36 geçmeli):
+3. Sunucuda duman testi (tüm kontroller geçmeli):
    ```bash
    hm run --rm -e APP_URL=http://app:3000 tools npm run smoke:prod
    ```
@@ -196,6 +196,21 @@ hm build
 hm run --rm tools npx drizzle-kit push    # "truncate" sorarsa HAYIR
 hm up -d app
 ```
+
+### Eski fotoğrafların meta verisini temizleme (tek seferlik)
+
+Yeni yüklemeler otomatik temizlenir. Önceden yüklenmiş fotoğraflardaki EXIF/GPS için geçiş betiği çalıştırılır. Önce `hm build tools` ile tools imajını yeniden derleyin, sonra:
+
+```bash
+hm run --rm tools npm run photos:sanitize:prod              # kuru çalıştırma: hiçbir şey yazılmaz
+hm run --rm tools npm run photos:sanitize:prod -- --apply   # dosyaları yerinde değiştirir
+```
+
+- **Dağıtımdan hemen sonra çalıştırın.** Geçişe kadar eski fotoğraflar `/api/files` üzerinden (admin ızgarası, konuşma ekranı) her istekte bellekte yeniden kodlanır: CPU harcar (aynı anda en çok 2 yeniden kodlama yapılır, fazlası sıraya girer). Sıra: önce kuru çalıştırma, çıktıyı inceleyin, sonra `--apply`.
+- Kuru çalıştırma özetindeki sayaçlar: `heic` = eski HEIC (temizlenemez, `/api/files` 415 verir), `failed` = okunamayan/bozuk/tanınmayan içerik (değiştirilmez), `wrongExt` = anahtar uzantısı içerikle uyuşmuyor (ör. `.bin`/`.pdf`/`.svg` anahtarlı JPEG; içeriğe göre temizlenir), `dbFixed` = dosya temiz ama satırın boyut/tür değeri eski (satır düzeltilir). `--limit N` ile parça parça çalıştırılabilir.
+- Gece görevleriyle çakışmasın: 02:00 (yedek) ve 03:15 (KVKK temizliği) dışında çalıştırın.
+- Hiçbir şey silinmez. Temizlenen içerik aynı anahtara yazılır (uzantısı yanlış olsa da anahtar değişmez); böylece KVKK silme yolları ve verilmiş imzalı bağlantılar çalışmaya devam eder, eski anahtarda ham kopya kalmaz. Tekrar çalıştırmak güvenlidir. Sonuç Denetim kaydına yazılır.
+- Orijinaller geri dönüşsüz değişir; ham kopyalar yalnızca gece yedeklerinde 14 gün kalır.
 
 ## Sorun giderme
 

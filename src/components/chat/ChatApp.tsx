@@ -641,7 +641,7 @@ function Conversation({
           <div className="flex items-end gap-2">
             {photosEnabled && (
               <>
-                <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => attach(e.target.files)} />
+                <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden onChange={(e) => attach(e.target.files)} />
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}

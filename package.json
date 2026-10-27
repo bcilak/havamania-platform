@@ -20,6 +20,8 @@
     "smoke:chat": "tsx --env-file=.env.local scripts/smoke-chat.mts",
     "db:init:prod": "tsx scripts/db-init.mts",
     "db:seed:prod": "tsx scripts/seed.mts",
+    "photos:sanitize": "tsx --env-file=.env.local scripts/sanitize-photos.mts",
+    "photos:sanitize:prod": "tsx scripts/sanitize-photos.mts",
     "test:unit": "tsx --test \"src/**/*.test.ts\"",
     "smoke:prod": "tsx scripts/smoke.mts"
   },
@@ -41,6 +43,7 @@
     "postgres": "^3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "sharp": "0.35.5",
     "unpdf": "^1.8.1",
     "zod": "^4.6.5"
   },

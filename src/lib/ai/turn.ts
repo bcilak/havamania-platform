@@ -14,6 +14,8 @@ import {
 } from "@/db/schema";
 import { normalizeBotConfig, TONES, TOOLS, type BotConfig, type ModeConfig, type ToneId } from "@/lib/bot-config";
 import { getPublishedVersion, type BotRow, type BotVersionRow } from "@/lib/bot";
+import { runImageWork } from "@/lib/image-limiter";
+import { ensureClean } from "@/lib/image-sanitize";
 import { storage } from "@/lib/storage";
 import { buildInstructions } from "./prompt";
 import { citedNumbers, stripCitations } from "./citations";
@@ -123,11 +125,14 @@ async function userMessage(text: string, photos: AttachmentRow[], includeImages:
   }
   if (!sendable.length) return { role: "user", content: [text, ...notes].filter(Boolean).join("\n") };
   const files = await Promise.all(sendable.map((p) => storage.get(p.storageKey)));
+  // Eski (temizlenmemiş) dosyalar modele meta verisiyle gitmesin: bellekte temizlenir, temizlenemeyen gönderilmez.
+  const cleaned = await Promise.all(files.map((f, i) => (f ? runImageWork(() => ensureClean(f.data, sendable[i].mediaType)).catch(() => null) : null)));
+  if (files.some((f, i) => f && !cleaned[i])) notes.push("[Kullanıcının bir fotoğrafı işlenemedi.]");
   return {
     role: "user",
     content: [
       { type: "text", text: [text || "Bu fotoğrafa bakar mısın?", ...notes].join("\n") },
-      ...files.flatMap((f, i) => (f ? [{ type: "file" as const, mediaType: sendable[i].mediaType, data: f.data }] : [])),
+      ...cleaned.flatMap((data, i) => (data ? [{ type: "file" as const, mediaType: sendable[i].mediaType, data }] : [])),
     ],
   };
 }

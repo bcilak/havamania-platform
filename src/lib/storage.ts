@@ -44,9 +44,40 @@ export function newStorageKey(folder: string, ext: string): string {
   return `${folder}/${ym}/${crypto.randomUUID()}.${ext}`;
 }
 
+const KEY_CHARS = /^[A-Za-z0-9._/-]+$/;
+const KEY_MAX = 512;
+
+/**
+ * Depo anahtarının kanonik biçimi: aynı dosyaya tek bir yazım. Geçerliyse anahtarın kendisi, değilse null.
+ * Reddedilenler: boş, çok uzun, baştaki/sondaki `/`, boş ya da `.`/`..`/noktayla biten parça, `[A-Za-z0-9._/-]` dışı her karakter
+ * (`\`, `%`, NUL, kontrol karakterleri, boşluk, Unicode). `./photos/x`, `kb/../photos/x`, `photos/demo/../x` gibi
+ * yollar izin ve temizlik kontrollerini (`startsWith`) atlatamasın diye tüm kontroller bu anahtarla yapılır.
+ */
+export function canonicalKey(key: string): string | null {
+  if (!key || key.length > KEY_MAX || !KEY_CHARS.test(key)) return null;
+  // Sonda nokta olan parça da reddedilir: Windows dosya sistemi `photos./x` yolunu `photos/x` olarak çözer.
+  for (const part of key.split("/")) if (!part || part.endsWith(".")) return null;
+  return key;
+}
+
+export class InvalidKeyError extends Error {
+  constructor() {
+    super("Geçersiz dosya yolu.");
+    this.name = "InvalidKeyError";
+  }
+}
+
+/** `canonicalKey` ya da `InvalidKeyError` fırlatır. */
+export function assertKey(key: string): string {
+  const k = canonicalKey(key);
+  if (k === null) throw new InvalidKeyError();
+  return k;
+}
+
 function localDriver(): Driver {
   const base = path.resolve(process.env.STORAGE_LOCAL_DIR || "./storage");
   const resolve = (key: string) => {
+    assertKey(key);
     const full = path.resolve(base, key);
     if (!full.startsWith(base + path.sep)) throw new Error("Geçersiz dosya yolu.");
     return full;
@@ -55,7 +86,29 @@ function localDriver(): Driver {
     async put(key, data) {
       const full = resolve(key);
       await fs.mkdir(path.dirname(full), { recursive: true });
-      await fs.writeFile(full, data);
+      // Atomik yazma: aynı dizinde geçici dosyaya yaz, sonra yerine taşı. Okuyucu ya eski ya yeni içeriği görür.
+      const tmp = `${full}.${crypto.randomUUID()}.tmp`;
+      try {
+        const fh = await fs.open(tmp, "w");
+        try {
+          await fh.writeFile(data);
+          await fh.sync();
+        } finally {
+          await fh.close();
+        }
+        // Hedef varsa sahip ve izinleri korunur (araç konteyneri root çalışır, dosya `app` kullanıcısına ait kalmalı).
+        const old = await fs.stat(full).catch(() => null);
+        if (old) {
+          await fs.chown(tmp, old.uid, old.gid).catch((e: NodeJS.ErrnoException) => {
+            if (e.code !== "EPERM") throw e;
+          });
+          await fs.chmod(tmp, old.mode & 0o777);
+        }
+        await fs.rename(tmp, full);
+      } catch (err) {
+        await fs.rm(tmp, { force: true });
+        throw err;
+      }
     },
     async get(key) {
       try {
@@ -110,8 +163,9 @@ function current(): Driver {
 }
 
 export const storage = {
-  put: (key: string, data: Uint8Array, contentType: string) => current().put(key, data, contentType),
-  get: (key: string) => current().get(key),
-  remove: (key: string) => current().remove(key),
+  // Anahtar her sürücüde (yerel ve S3) önce doğrulanır; geçersiz anahtar InvalidKeyError ile reddedilir.
+  put: async (key: string, data: Uint8Array, contentType: string) => current().put(assertKey(key), data, contentType),
+  get: async (key: string) => current().get(assertKey(key)),
+  remove: async (key: string) => current().remove(assertKey(key)),
   driverName: () => (process.env.STORAGE_DRIVER === "s3" ? "S3 uyumlu depo" : "Yerel disk"),
 };
