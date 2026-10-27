@@ -20,7 +20,7 @@ const BACK = "/admin/ayarlar/modeller";
 export async function createProvider(fd: FormData) {
   const admin = await requireAdmin("models");
   const kind = str(fd, "kind") as ProviderKind;
-  if (!(kind in PROVIDER_KINDS)) fail(BACK, "Sağlayıcı türünü seçin.");
+  if (!Object.hasOwn(PROVIDER_KINDS, kind)) fail(BACK, "Sağlayıcı türünü seçin.");
   const meta = PROVIDER_KINDS[kind];
   const apiKey = str(fd, "apiKey", 500);
   const baseUrl = str(fd, "baseUrl", 500);

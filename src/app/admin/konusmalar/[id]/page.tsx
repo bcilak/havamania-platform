@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { asc, eq, inArray } from "drizzle-orm";
-import { Bot, ChevronLeft, CircleAlert, Flag, PenLine, ThumbsDown, ThumbsUp, User, Wrench, BookOpen } from "lucide-react";
+import { Bot, ChevronLeft, CircleAlert, ClipboardCheck, Flag, PenLine, ThumbsDown, ThumbsUp, User, Wrench, BookOpen } from "lucide-react";
 import { db } from "@/db";
 import { appUsers, attachments, conversations, corrections, feedback, messages } from "@/db/schema";
-import { ConfirmButton, CountedTextarea, SubmitButton } from "@/components/client";
-import { Badge, btn, cx, Field, Flash, KeyValue, ModeBadge, PageHeader, Panel, selectCls, textareaCls } from "@/components/ui";
+import { ConfirmButton, SubmitButton } from "@/components/client";
+import { Badge, btn, checkboxCls, cx, Flash, KeyValue, ModeBadge, PageHeader, Panel, textareaCls } from "@/components/ui";
 import { describeMatch } from "@/lib/ai/retrieval-core";
 import { requireAdmin } from "@/lib/auth";
 import { getMainBot } from "@/lib/bot";
@@ -14,7 +14,8 @@ import { loadCorrectionStatus } from "@/lib/corrections";
 import type { SearchParams } from "@/lib/form";
 import { fmtDateTime, fmtInt, fmtTime, fmtUsd, maskId, PLATFORM_LABEL } from "@/lib/format";
 import { can } from "@/lib/roles";
-import { addCorrection, deleteConversation, deletePhoto, toggleFlag, togglePhoto } from "./actions";
+import { SourceForm } from "@/components/admin/SourceForm";
+import { addCaseFromMessage, addCorrection, deleteConversation, deletePhoto, toggleFlag, togglePhoto } from "./actions";
 
 export const metadata = { title: "Konuşma" };
 
@@ -197,24 +198,51 @@ export default async function ConversationDetail({ params, searchParams }: { par
                           <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] text-accent">
                             <PenLine className="size-3.5" /> Bu cevabı düzelt
                           </summary>
-                          <form action={addCorrection} className="grid gap-3 border-t border-line p-3">
+                          <div className="border-t border-line p-3">
+                            <SourceForm
+                              key={`${sp.ok ?? ""}|${sp.hata ?? ""}`}
+                              action={addCorrection}
+                              idPrefix={`fix-${m.id}`}
+                              hidden={{ conversationId: c.id, messageId: m.id, wrong: m.content }}
+                              initial={{ question: prevUser?.content ?? "", mode: "mode" }}
+                              questionRows={2}
+                              questionHint="Kullanıcıların bu soruyu sorma biçimi. Gerekirse sadeleştirin."
+                              answerLabel="Doğru cevap"
+                              answerName="correct"
+                              answerMax={4000}
+                              answerRows={4}
+                              modeName="scope"
+                              modeOptions={[
+                                { value: "mode", label: `Yalnızca ${MODE_META[c.mode].label}` },
+                                { value: "all", label: "Tüm modlar" },
+                              ]}
+                              submitLabel="Düzeltmeyi kaydet"
+                              pendingText="Ekleniyor…"
+                            />
+                          </div>
+                        </details>
+                      )}
+                      {canTrain && prevUser?.content && (
+                        <details className="rounded-lg border border-line">
+                          <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] text-accent">
+                            <ClipboardCheck className="size-3.5" /> Senaryoya ekle
+                          </summary>
+                          <form action={addCaseFromMessage} className="grid gap-3 border-t border-line p-3">
                             <input type="hidden" name="conversationId" value={c.id} />
                             <input type="hidden" name="messageId" value={m.id} />
-                            <input type="hidden" name="wrong" value={m.content} />
-                            <Field label="Soru" htmlFor={`q-${m.id}`} hint="Kullanıcıların bu soruyu sorma biçimi. Gerekirse sadeleştirin.">
-                              <textarea id={`q-${m.id}`} name="question" rows={2} defaultValue={prevUser?.content ?? ""} required className={textareaCls} />
-                            </Field>
-                            <Field label="Doğru cevap" htmlFor={`a-${m.id}`}>
-                              <CountedTextarea id={`a-${m.id}`} name="correct" rows={4} required max={4000} className={textareaCls} />
-                            </Field>
-                            <div className="flex flex-wrap items-end justify-between gap-3">
-                              <Field label="Geçerli olduğu modlar" htmlFor={`s-${m.id}`}>
-                                <select id={`s-${m.id}`} name="scope" className={`${selectCls} w-auto`}>
-                                  <option value="mode">Yalnızca {MODE_META[c.mode].label}</option>
-                                  <option value="all">Tüm modlar</option>
-                                </select>
-                              </Field>
-                              <SubmitButton pendingText="Ekleniyor…">Düzeltmeyi kaydet</SubmitButton>
+                            <label className="grid gap-1.5 text-[13px] font-medium" htmlFor={`case-${m.id}`}>
+                              Soru
+                              <textarea id={`case-${m.id}`} name="question" rows={2} required maxLength={1000} defaultValue={prevUser.content.slice(0, 1000)} className={textareaCls} />
+                              <span className="text-xs font-normal text-muted">Test senaryosu olarak kaydedilir. Beklenen ölçütleri sonraki adımda belirlersiniz.</span>
+                            </label>
+                            <label className="flex items-start gap-2 text-[13px]">
+                              <input type="checkbox" name="piiOk" required className={`${checkboxCls} mt-0.5`} />
+                              <span>Kişisel veri içermediğinden emin oldum (ad, telefon, adres gibi bilgiler soruda yok). Kaynak konuşma silinse de senaryo kalır.</span>
+                            </label>
+                            <div>
+                              <SubmitButton variant="secondary" size="sm" pendingText="Ekleniyor…">
+                                Senaryo oluştur
+                              </SubmitButton>
                             </div>
                           </form>
                         </details>

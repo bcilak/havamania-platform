@@ -42,7 +42,7 @@ export function isEffective(row: KbRow, byId: Map<string, KbRow>, isUsable: (r: 
   return next !== undefined && !isUsable(next);
 }
 
-const indexRows = (rows: KbRow[]) => new Map(rows.map((r) => [r.id, r]));
+export const indexRows = (rows: KbRow[]) => new Map(rows.map((r) => [r.id, r]));
 
 /** Taslak aramasının kapsadığı kaynaklar (parçası olmayanlar zaten sonuç vermez). */
 export function draftSourceIds(rows: KbRow[]): string[] {
@@ -122,6 +122,22 @@ export function lineageOf(id: string, rows: KbRow[]): string[] {
   return out;
 }
 
+/**
+ * Zincirin tamamı, eskiden yeniye: `id` hangi halkada olursa olsun baş satıra (en yeni)
+ * kadar ilerlenir, sonra öncüller geriye doğru sıralanır. Kayıp bağda zincir kısalır.
+ */
+export function chainOf(id: string, rows: KbRow[]): string[] {
+  const chain = [headOf(id, rows)];
+  const seen = new Set(chain);
+  for (;;) {
+    const prev = rows.find((r) => r.supersededBy === chain[0] && !seen.has(r.id));
+    if (!prev) break;
+    seen.add(prev.id);
+    chain.unshift(prev.id);
+  }
+  return chain;
+}
+
 export type RemovalPlan = {
   /** Korunan satırlar: deletedAt yazılır, yayında kullanılmaya devam eder. */
   soft: string[];
@@ -186,4 +202,17 @@ export function diffSources(publishedIds: string[], nextIds: string[], rows: KbR
   }
   const added = nextIds.filter((id) => !pub.has(id) && !replacedTo.has(id));
   return { added, replaced, removed };
+}
+
+export type SourceState = "active" | "deleted" | "superseded" | "missing";
+
+/**
+ * Bir sürümün listesindeki kaynak bugün ne durumda: etkin, silinmiş (sürüm hâlâ
+ * kullanıyor), yeniden işlenmiş (yerine yenisi var) ya da satırı temizlenmiş.
+ */
+export function sourceState(id: string, byId: Map<string, KbRow>): SourceState {
+  const row = byId.get(id);
+  if (!row) return "missing";
+  if (row.deletedAt) return "deleted";
+  return row.supersededBy ? "superseded" : "active";
 }

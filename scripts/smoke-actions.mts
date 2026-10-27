@@ -30,12 +30,12 @@ const token = await new SignJWT({ role: admin.role, email: admin.email, name: ad
   .sign(new TextEncoder().encode(process.env.SESSION_SECRET!));
 
 /** Bir server action'ı tarayıcının yaptığı gibi çağırır; yönlendirme adresini döner. */
-async function act(page: string, name: string, fields: Record<string, string | string[]>): Promise<string> {
+async function act(page: string, name: string, fields: Record<string, string | string[]>, url = page): Promise<string> {
   // JavaScript'siz form gönderimi (progressive enhancement): tarayıcının yaptığının aynısı.
   const fd = new FormData();
   fd.append(`$ACTION_ID_${actionId(name, page)}`, "");
   for (const [k, v] of Object.entries(fields)) for (const x of Array.isArray(v) ? v : [v]) fd.append(k, x);
-  const res = await fetch(BASE + page, { method: "POST", headers: { cookie: `hm_admin=${token}` }, body: fd, redirect: "manual" });
+  const res = await fetch(BASE + url, { method: "POST", headers: { cookie: `hm_admin=${token}` }, body: fd, redirect: "manual" });
   return decodeURIComponent(res.headers.get("location") ?? "");
 }
 
@@ -254,6 +254,335 @@ check(
 );
 pageHtml = await (await fetch(BASE + "/admin/egitim/duzeltmeler", cookie)).text();
 check("Düzeltme: yayından sonra sayfada 'Yayında'", badgeBefore(pageHtml, cq).includes("Yayında"), "");
+
+/* ---------- 5. Kişilik genişletmeleri: en uzun cevap, örnek konuşmalar, yasak konular, ton metinleri ---------- */
+loc = await act("/admin/egitim/kisilik", "saveMode", {
+  modeId: "agro",
+  enabled: "on",
+  label: agro.label,
+  greeting: agro.greeting,
+  suggestions: agro.suggestions.join("\n"),
+  instructions: agro.instructions,
+  tone: "dengeli",
+  model: "",
+  temperature: "0.3",
+  maxOutputTokens: "450",
+  exUser1: "Smoke örnek soru",
+  exAssistant1: "Smoke örnek cevap",
+  tools: agro.tools,
+});
+const [p1] = await sql`select draft_config from bots where id = ${bot.id}`;
+const agroNow = p1.draft_config.modes.agro;
+check(
+  "Kişilik: en uzun cevap ve örnek konuşma taslağa kaydedildi",
+  loc.includes("ok=") && agroNow.maxOutputTokens === 450 && agroNow.examples?.length === 1 && agroNow.examples[0].assistant === "Smoke örnek cevap",
+  loc,
+);
+loc = await act("/admin/egitim/kisilik", "saveMode", {
+  modeId: "agro",
+  enabled: "on",
+  label: agro.label,
+  greeting: agro.greeting,
+  suggestions: agro.suggestions.join("\n"),
+  instructions: agro.instructions,
+  tone: "dengeli",
+  model: "",
+  temperature: "0.3",
+  exUser1: "yalnız soru",
+  tools: agro.tools,
+});
+const [p2] = await sql`select draft_config from bots where id = ${bot.id}`;
+check("Kişilik: yarım örnek çifti hata verir, taslak değişmez", loc.includes("hata=") && loc.includes("Örnek 1") && JSON.stringify(p2.draft_config) === JSON.stringify(p1.draft_config), loc);
+
+loc = await act("/admin/egitim/kisilik", "saveRules", {
+  guardrails: p1.draft_config.guardrails,
+  fallbackMessage: p1.draft_config.fallbackMessage,
+  blockedTopics: "smoke yasak 1\nsmoke yasak 2",
+  tone_kisa: "Smoke ton metni: tek cümleyle cevapla.",
+  toneReset_uzman: "on",
+});
+const [p3] = await sql`select draft_config from bots where id = ${bot.id}`;
+check(
+  "Kişilik: yasak konular ve ton metni kaydedildi (varsayılana dönen ton kayda girmez)",
+  loc.includes("ok=") && JSON.stringify(p3.draft_config.blockedTopics) === JSON.stringify(["smoke yasak 1", "smoke yasak 2"]) && p3.draft_config.toneOverrides?.kisa?.startsWith("Smoke ton") && !p3.draft_config.toneOverrides?.uzman,
+  loc,
+);
+loc = await act("/admin/egitim/kisilik", "saveRules", { guardrails: p1.draft_config.guardrails, fallbackMessage: "x", blockedTopics: "y".repeat(81) });
+const [p4] = await sql`select draft_config from bots where id = ${bot.id}`;
+check("Kişilik: 81 karakterlik yasak konu hata verir, taslak değişmez", loc.includes("hata=") && loc.includes("80") && JSON.stringify(p4.draft_config) === JSON.stringify(p3.draft_config), loc);
+
+/* ---------- 6. Sürüm ayrıntısı: not düzenleme (audit) ve karşılaştırma ---------- */
+const noteVersion = extraVersionIds[0]; // bu çalıştırmanın oluşturduğu sürüm; sonunda silinir
+const auditCount = async () => (await sql`select count(*)::int as n from audit_log where action = 'bot.version_note'`)[0].n as number;
+const a0 = await auditCount();
+const oldNote = (await sql`select note from bot_versions where id = ${noteVersion}`)[0].note as string | null;
+loc = await act("/admin/yayin", "saveVersionNote", { versionId: noteVersion, note: "smoke yeni not" });
+const [noteRow] = await sql`select note from bot_versions where id = ${noteVersion}`;
+const [noteAudit] = await sql`select detail from audit_log where action = 'bot.version_note' order by created_at desc limit 1`;
+check(
+  "Sürüm: not düzenlendi ve audit_log'a eski/yeni yazıldı",
+  loc.includes("ok=") && noteRow.note === "smoke yeni not" && (await auditCount()) === a0 + 1 && noteAudit?.detail?.to === "smoke yeni not" && noteAudit?.detail?.from === oldNote,
+  `${loc} · ${JSON.stringify(noteAudit?.detail)}`,
+);
+loc = await act("/admin/yayin", "saveVersionNote", { versionId: noteVersion, note: "n".repeat(301) });
+const [noteRow2] = await sql`select note from bot_versions where id = ${noteVersion}`;
+check("Sürüm: 301 karakterlik not hata verir, not değişmez", loc.includes("hata=") && loc.includes("300") && noteRow2.note === "smoke yeni not" && (await auditCount()) === a0 + 1, loc);
+
+const detailRes = await fetch(`${BASE}/admin/yayin/${noteVersion}?karsilastir=taslak`, cookie);
+const detailHtml = await detailRes.text();
+check("Sürüm: karşılaştırma sayfası (sürüm ↔ taslak) 200", detailRes.status === 200 && detailHtml.includes("Bilgi tabanı") && detailHtml.includes("Embedding modeli") && detailHtml.includes("smoke yeni not"), `${detailRes.status}`);
+if (origVersion) {
+  const twoRes = await fetch(`${BASE}/admin/yayin/${noteVersion}?karsilastir=${origVersion.id}`, cookie);
+  const twoHtml = await twoRes.text();
+  check("Sürüm: iki sürümün karşılaştırması 200 ve başlığı", twoRes.status === 200 && twoHtml.includes(" → ") && twoHtml.includes(`v${origVersion.number}`), `${twoRes.status}`);
+}
+const missingRes = await fetch(`${BASE}/admin/yayin/00000000-0000-4000-8000-000000000000`, cookie);
+check("Sürüm: olmayan sürüm kimliği 404", missingRes.status === 404, `${missingRes.status}`);
+
+/* ---------- 7. Bilgi tabanı: düzenleme (halef satır), tekrar kontrolü, kaynak ayrıntısı, sayfalama ---------- */
+const KB = "/admin/egitim/bilgi-tabani";
+const KB_DETAIL = "/admin/egitim/bilgi-tabani/[id]";
+const tag = Date.now();
+const waitReadyId = async (sourceId: string) => {
+  let st = "";
+  for (let i = 0; i < 40 && st !== "ready" && st !== "failed"; i++) {
+    await new Promise((r) => setTimeout(r, 300));
+    [{ status: st } = { status: "" }] = await sql`select status from kb_sources where id = ${sourceId}`;
+  }
+  return st;
+};
+const chunkText = async (sourceId: string) => ((await sql`select content from kb_chunks where source_id = ${sourceId} order by idx`).map((r) => r.content as string).join("\n"));
+const previewHits = async (target: "draft" | "published", text: string) => {
+  const res = await fetch(BASE + "/api/admin/prompt-preview", {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: BASE, cookie: `hm_admin=${token}` },
+    body: JSON.stringify({ mode: "agro", text, target }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { hits?: { relevant: boolean; content: string }[] };
+  return (body.hits ?? []).filter((h) => h.relevant).map((h) => h.content).join("\n");
+};
+
+// (a) Yayındaki SSS düzenlenince yayın eski cevabı, taslak yeni cevabı döndürür; eski satır korunur.
+const eq1 = `Smoke düzenleme sorusu ${tag}`;
+extraSourceQuestions.push(eq1);
+await act(KB, "addQa", { question: eq1, answer: `ESKICEVAP${tag} burada.`, mode: "all" });
+const [qa1] = await sql`select id from kb_sources where question = ${eq1}`;
+check("Düzenleme: SSS eklendi ve işlendi", Boolean(qa1) && (await waitReadyId(qa1.id)) === "ready", "");
+const pubForEdit = await act("/admin/yayin", "publish", { note: "smoke düzenleme", force: "on" });
+extraVersionIds.push(await publishedNow());
+check("Düzenleme: SSS'yi içeren sürüm yayınlandı", pubForEdit.includes("ok=") && ((await sql`select kb_source_ids from bot_versions where id = ${await publishedNow()}`)[0].kb_source_ids as string[]).includes(qa1.id), pubForEdit);
+
+loc = await act(KB_DETAIL, "updateSource", { id: qa1.id, question: eq1, answer: `YENICEVAP${tag} burada.`, mode: "all" }, `${KB}/${qa1.id}`);
+const [oldRow] = await sql`select superseded_by from kb_sources where id = ${qa1.id}`;
+const nextId = oldRow?.superseded_by as string | null;
+check("Düzenleme: yayındaki SSS yerinde değişmedi, halef satır açıldı", loc.includes("ok=") && Boolean(nextId) && nextId !== qa1.id, loc);
+if (nextId) {
+  const nextState = await waitReadyId(nextId);
+  const [pubRow] = await sql`select kb_source_ids from bot_versions where id = ${await publishedNow()}`;
+  check("Düzenleme: yayındaki sürüm eski satırda kaldı, halef sürümde değil", (pubRow.kb_source_ids as string[]).includes(qa1.id) && !(pubRow.kb_source_ids as string[]).includes(nextId), "");
+  check("Düzenleme: eski parça eski cevabı, halef parça yeni cevabı taşır", nextState === "ready" && (await chunkText(qa1.id)).includes(`ESKICEVAP${tag}`) && (await chunkText(nextId)).includes(`YENICEVAP${tag}`), nextState);
+  const pubSeen = await previewHits("published", eq1);
+  const draftSeen = await previewHits("draft", eq1);
+  check("Düzenleme: yayındaki sürüm eski cevabı, taslak yeni cevabı döndürür", pubSeen.includes(`ESKICEVAP${tag}`) && !pubSeen.includes(`YENICEVAP${tag}`) && draftSeen.includes(`YENICEVAP${tag}`) && !draftSeen.includes(`ESKICEVAP${tag}`), `yayın: ${pubSeen.slice(0, 60)} · taslak: ${draftSeen.slice(0, 60)}`);
+
+  const detail = await fetch(`${BASE}${KB}/${qa1.id}`, cookie);
+  const detailHtml = await detail.text();
+  const [{ n: nChunks }] = await sql`select count(*)::int as n from kb_chunks where source_id = ${qa1.id}`;
+  const [{ chunk_count: cc }] = await sql`select chunk_count from kb_sources where id = ${qa1.id}`;
+  check("Ayrıntı: kaynak sayfası 200, parça sayısı chunk_count'a eşit, halef zinciri görünür", detail.status === 200 && cc === nChunks && detailHtml.includes(`Parçalar (${cc})`) && detailHtml.includes("Halef") && detailHtml.includes("Vektör"), `${detail.status} · ${cc}/${nChunks}`);
+  const headDetail = await (await fetch(`${BASE}${KB}/${nextId}`, cookie)).text();
+  check("Ayrıntı: güncel kayıt öncülünü ve sürüm bağlantısını gösterir", headDetail.includes("Öncül") && headDetail.includes("Hiçbir sürümde yok") && detailHtml.includes("/admin/yayin/"), "");
+}
+const missingKb = await fetch(`${BASE}${KB}/00000000-0000-4000-8000-000000000000`, cookie);
+const badKb = await fetch(`${BASE}${KB}/yok`, cookie);
+check("Ayrıntı: olmayan / geçersiz kaynak kimliği 404", missingKb.status === 404 && badKb.status === 404, `${missingKb.status},${badKb.status}`);
+
+// (b) Korunmayan (hiç yayınlanmamış) SSS yerinde güncellenir.
+const eq2 = `Smoke yerinde düzenleme ${tag}`;
+extraSourceQuestions.push(eq2);
+await act(KB, "addQa", { question: eq2, answer: `ILKCEVAP${tag}`, mode: "agro" });
+const [qa2] = await sql`select id from kb_sources where question = ${eq2}`;
+await waitReadyId(qa2.id);
+loc = await act(KB_DETAIL, "updateSource", { id: qa2.id, question: eq2, answer: `SONCEVAP${tag}`, mode: "agro" }, `${KB}/${qa2.id}`);
+const st2 = await waitReadyId(qa2.id);
+const [row2] = await sql`select superseded_by from kb_sources where id = ${qa2.id}`;
+const [{ n: rows2 }] = await sql`select count(*)::int as n from kb_sources where question = ${eq2}`;
+check("Düzenleme: yayınlanmamış SSS aynı satırda güncellendi ve yeniden işlendi", loc.includes("ok=") && st2 === "ready" && !row2.superseded_by && rows2 === 1 && (await chunkText(qa2.id)).includes(`SONCEVAP${tag}`), loc);
+
+// (c) Tekrar kontrolü: aynı soru uyarıyla döner ve kayıt oluşmaz; force ile eklenir; farklı mod çakışmaz.
+const sameQuestionLoud = eq2.toUpperCase() + " ?";
+extraSourceQuestions.push(sameQuestionLoud);
+const dupWarn = await act(KB, "addQa", { question: sameQuestionLoud, answer: "Başka cevap", mode: "agro" });
+const [{ n: dup1 }] = await sql`select count(*)::int as n from kb_sources where question = ${sameQuestionLoud}`;
+check("Tekrar: aynı soru (büyük harf/noktalama farkıyla) force'suz eklenmez, yönlendirme yok", !dupWarn.includes("ok=") && dup1 === 0, `${dupWarn} · ${dup1}`);
+const dupForce = await act(KB, "addQa", { question: sameQuestionLoud, answer: "Başka cevap", mode: "agro", force: "on" });
+const [{ n: dup2 }] = await sql`select count(*)::int as n from kb_sources where question = ${sameQuestionLoud}`;
+check("Tekrar: force ile eklenir", dupForce.includes("ok=") && dup2 === 1, dupForce);
+const otherMode = `Smoke farklı mod ${tag}`;
+extraSourceQuestions.push(otherMode);
+await act(KB, "addQa", { question: otherMode, answer: "Genel cevap", mode: "genel" });
+await act(KB, "addQa", { question: otherMode, answer: "Fly cevabı", mode: "fly" });
+const [{ n: modes }] = await sql`select count(*)::int as n from kb_sources where question = ${otherMode}`;
+check("Tekrar: farklı moddaki aynı soru uyarı vermez", modes === 2, `${modes}`);
+const corrDup = await act("/admin/egitim/duzeltmeler", "addManualCorrection", { question: cq, answer: "Yinelenen düzeltme", mode: "all" });
+const [{ n: corrRows }] = await sql`select count(*)::int as n from corrections where question = ${cq}`;
+check("Tekrar: aynı soruyla ikinci düzeltme force'suz eklenmez", !corrDup.includes("ok=") && corrRows === 1, `${corrDup} · ${corrRows}`);
+// Düzenlemede de: ikinci SSS'nin sorusunu ilkinin sorusuna çevirmek uyarıyla durur.
+const [qa3] = await sql`select id from kb_sources where question = ${otherMode} and mode = 'fly'`;
+await waitReadyId(qa3.id);
+await act(KB_DETAIL, "updateSource", { id: qa3.id, question: eq2, answer: "Fly cevabı", mode: "agro" }, `${KB}/${qa3.id}`);
+const [qa3Row] = await sql`select question, mode from kb_sources where id = ${qa3.id}`;
+check("Tekrar: düzenlemede benzer soru force'suz kaydedilmez", qa3Row.question === otherMode && qa3Row.mode === "fly", `${qa3Row.question}`);
+
+// (d) Düzeltme düzenleme: yayındaki düzeltme halef satıra taşınır, corrections kaydı güncellenir, rozet "Yayın bekliyor" olur.
+const corrSrcBefore = corr.kb_source_id as string;
+loc = await act(KB_DETAIL, "updateSource", { id: corrSrcBefore, question: cq, answer: `Düzenlenmiş düzeltme ${tag}`, mode: "all" }, `${KB}/${corrSrcBefore}`);
+const [corrNow] = await sql`select id, kb_source_id, correct_answer, updated_at, updated_by from corrections where question = ${cq}`;
+const [{ n: corrCount }] = await sql`select count(*)::int as n from corrections where question = ${cq}`;
+const [corrOld] = await sql`select superseded_by from kb_sources where id = ${corrSrcBefore}`;
+check(
+  "Düzeltme düzenleme: corrections güncellendi, kb_source_id halefe taşındı, tek kayıt",
+  loc.includes("ok=") && corrCount === 1 && corrNow.correct_answer === `Düzenlenmiş düzeltme ${tag}` && Boolean(corrNow.updated_at) && Boolean(corrNow.updated_by) && corrNow.kb_source_id === corrOld?.superseded_by && corrNow.kb_source_id !== corrSrcBefore,
+  loc,
+);
+await waitReadyId(corrNow.kb_source_id);
+pageHtml = await (await fetch(BASE + "/admin/egitim/duzeltmeler", cookie)).text();
+check("Düzeltme düzenleme: sayfada yeni cevap ve 'Yayın bekliyor' rozeti", pageHtml.includes(`Düzenlenmiş düzeltme ${tag}`) && badgeBefore(pageHtml, cq).includes("Yayın bekliyor"), "");
+loc = await act("/admin/yayin", "publishPendingCorrections", {});
+const afterPending = await publishedNow();
+extraVersionIds.push(afterPending);
+const [pendingVer] = await sql`select kb_source_ids from bot_versions where id = ${afterPending}`;
+pageHtml = await (await fetch(BASE + "/admin/egitim/duzeltmeler", cookie)).text();
+check(
+  "Düzeltme düzenleme: yayından sonra 'Yayında'; sürümde halef var, eski satır yok",
+  loc.includes("ok=") && badgeBefore(pageHtml, cq).includes("Yayında") && (pendingVer.kb_source_ids as string[]).includes(corrNow.kb_source_id) && !(pendingVer.kb_source_ids as string[]).includes(corrSrcBefore),
+  loc,
+);
+
+// (e) Sayfalama: 55 kaynak ve 55 düzeltme eklenir; 50'şerli sayfalar, süzgeç korunur.
+const pgTag = `smokesayfa${tag}`;
+await sql`insert into kb_sources (bot_id, type, mode, title, status, question, answer)
+  select ${bot.id}, 'qa', 'all', ${pgTag} || ' ' || g, 'ready', ${pgTag} || ' soru ' || g, 'x' from generate_series(1, 55) g`;
+await sql`insert into corrections (mode, question, correct_answer) select 'all', ${pgTag} || ' soru ' || g, 'x' from generate_series(1, 55) g`;
+const kbP1 = await (await fetch(`${BASE}${KB}?tur=qa`, cookie)).text();
+const kbP2Res = await fetch(`${BASE}${KB}?tur=qa&sayfa=2`, cookie);
+const kbP2 = await kbP2Res.text();
+const rowLinks = (html: string) => new Set(html.match(/href="\/admin\/egitim\/bilgi-tabani\/[0-9a-f-]{36}"/g) ?? []).size;
+check("Sayfalama: kaynak listesi 50'şerli, 2. sayfada 'Önceki' ve süzgeç korunur", rowLinks(kbP1) === 50 && kbP1.includes("Sonraki") && kbP1.includes("tur=qa") && kbP2Res.status === 200 && kbP2.includes("Önceki") && rowLinks(kbP2) > 0, `${rowLinks(kbP1)} · ${rowLinks(kbP2)}`);
+const cP1 = await (await fetch(`${BASE}/admin/egitim/duzeltmeler`, cookie)).text();
+const cP2 = await (await fetch(`${BASE}/admin/egitim/duzeltmeler?sayfa=2`, cookie)).text();
+const cPending = await (await fetch(`${BASE}/admin/egitim/duzeltmeler?durum=bekliyor`, cookie)).text();
+// Sayfa metni RSC akış verisinde de geçtiği için her kayıt HTML'de iki kez görünür; bu yüzden kayıt başına tek sayılır (rowLinks gibi).
+const cCount = (html: string) => new Set(html.match(new RegExp(`${pgTag} soru \\d+`, "g")) ?? []).size;
+check("Sayfalama: düzeltmeler 50'şerli (200 sınırı yok), 2. sayfa var", cP1.includes("Sonraki") && cP2.includes("Önceki") && cCount(cP1) === 50 && cCount(cP2) === 5, `${cCount(cP1)} · ${cCount(cP2)}`);
+check("Sayfalama: durum süzgeci kaynaksız (silinmiş) kayıtları 'Yayın bekliyor'dan ayıklar", cPending.includes("200") && !cPending.includes(pgTag), "");
+await sql`delete from kb_sources where title like ${pgTag + " %"}`;
+await sql`delete from corrections where question like ${pgTag + " %"}`;
+
+// Kayıtlı test senaryoları (ekle/düzenle/sil, konuşmadan ekle). Koşu BAŞLATILMAZ: gerçek model çağrısı ve harcama yok.
+const EV = "/admin/egitim/test/senaryolar";
+const evTag = `smokesenaryo${Date.now()}`;
+const evAudit = async (action: string, target: string) => (await sql`select count(*)::int as n from audit_log where action = ${action} and target = ${target}`)[0].n as number;
+loc = await act(EV, "saveCase", { question: `${evTag} Yarın don olur mu?`, mode: "agro", mustInclude: "don\nİZMİR\n", mustNotInclude: "kesinlikle", expectTool: "any", expectUnanswered: "no", note: evTag });
+const [evCase] = await sql`select id, mode, expect, created_by from eval_cases where note = ${evTag}`;
+check(
+  "Senaryo: eklendi (ölçütler ayrıştırıldı) ve audit_log'a eval.case_create yazıldı",
+  loc.includes("ok=") && !!evCase && evCase.mode === "agro" && evCase.expect.mustInclude.length === 2 && evCase.expect.expectTool === "any" && evCase.expect.expectUnanswered === false && (await evAudit("eval.case_create", evCase.id)) === 1,
+  loc,
+);
+loc = await act(EV, "saveCase", { question: `${evTag} geçersiz kaynak`, mode: "genel", expectSource: crypto.randomUUID(), note: `${evTag}-x` });
+const [badSrc] = await sql`select id from eval_cases where note = ${evTag + "-x"}`;
+check("Senaryo: olmayan beklenen kaynak reddedilir", loc.includes("hata=") && !badSrc, loc);
+loc = await act(EV, "saveCase", { question: `${evTag} yarım konum`, mode: "genel", lat: "39.6", note: `${evTag}-y` });
+const [halfLoc] = await sql`select id from eval_cases where note = ${evTag + "-y"}`;
+check("Senaryo: yarım/geçersiz konum reddedilir", loc.includes("hata=") && !halfLoc, loc);
+loc = await act(EV, "saveCase", { id: evCase.id, question: `${evTag} Yarın don olur mu? (düzenlendi)`, mode: "agro", lat: "39,65", lon: "27.88", locName: "Balıkesir", mustInclude: "don", note: evTag });
+const [evEdited] = await sql`select question, location, expect, updated_at from eval_cases where id = ${evCase.id}`;
+check(
+  "Senaryo: düzenlendi (konum kaydedildi, ölçüt değişti) ve audit_log'a eval.case_update yazıldı",
+  loc.includes("ok=") && evEdited.question.includes("düzenlendi") && evEdited.location?.lat === 39.65 && evEdited.expect.mustInclude.length === 1 && !!evEdited.updated_at && (await evAudit("eval.case_update", evCase.id)) === 1,
+  loc,
+);
+const evPage = await fetch(BASE + EV, cookie);
+const evHtml = await evPage.text();
+check("Senaryo sayfası: liste, KVKK uyarısı ve koşu formu görünür", evPage.status === 200 && evHtml.includes(`${evTag} Yarın don olur mu?`) && evHtml.includes("Kişisel veri") && evHtml.includes("Seçilenleri koş"), `${evPage.status}`);
+check("Koşu sayfası: bilinmeyen koşu 404", (await fetch(`${BASE}/admin/egitim/test/kosular/${crypto.randomUUID()}`, cookie)).status === 404, "");
+loc = await act(EV, "startRun", { target: "draft", scope: "selected", maxCost: "1" });
+const [anyRun] = await sql`select count(*)::int as n from eval_runs where started_by = ${admin.email} and started_at > now() - interval '1 minute'`;
+check("Koşu: senaryo seçilmeden başlatılamaz (koşu kaydı yok)", loc.includes("hata=") && anyRun.n === 0, loc);
+loc = await act(EV, "startRun", { target: "baska", scope: "all" });
+check("Koşu: geçersiz hedef reddedilir", loc.includes("hata="), loc);
+
+// Konuşmadan senaryo: onay kutusu zorunlu; kaynak konuşma silinince senaryo kalır, kaynak bağı boşalır.
+const [evConv] = await sql`insert into conversations (id, bot_id, mode, platform, title) values (${crypto.randomUUID()}, ${bot.id}, 'fly', 'playground', ${evTag}) returning id`;
+const [evUserMsg] = await sql`insert into messages (conversation_id, role, content) values (${evConv.id}, 'user', ${evTag + " FL350 türbülans var mı?"}) returning id`;
+const [evBotMsg] = await sql`insert into messages (conversation_id, role, content, created_at) values (${evConv.id}, 'assistant', 'Orta düzeyde.', now() + interval '1 second') returning id`;
+const CONV = "/admin/konusmalar/[id]";
+loc = await act(CONV, "addCaseFromMessage", { conversationId: evConv.id, messageId: evBotMsg.id, question: `${evTag} FL350 türbülans var mı?` }, `/admin/konusmalar/${evConv.id}`);
+const [noConsent] = await sql`select id from eval_cases where question like ${evTag + " FL350%"}`;
+check("Konuşmadan senaryo: kişisel veri onayı olmadan oluşmaz", loc.includes("hata=") && !noConsent, loc);
+loc = await act(CONV, "addCaseFromMessage", { conversationId: evConv.id, messageId: evBotMsg.id, question: `${evTag} FL350 türbülans var mı?`, piiOk: "on" }, `/admin/konusmalar/${evConv.id}`);
+const [fromConv] = await sql`select id, mode, source_message_id, expect from eval_cases where question like ${evTag + " FL350%"}`;
+check(
+  "Konuşmadan senaryo: onayla oluşur (mod konuşmadan, kaynak = kullanıcı mesajı), düzenleme sayfasına yönlenir, audit yazılır",
+  loc.includes("duzenle=") && !!fromConv && fromConv.mode === "fly" && fromConv.source_message_id === evUserMsg.id && (await evAudit("eval.case_create", fromConv.id)) === 1,
+  loc,
+);
+await sql`delete from conversations where id = ${evConv.id}`;
+const [orphan] = await sql`select question, source_message_id from eval_cases where id = ${fromConv.id}`;
+check("Konuşmadan senaryo: kaynak konuşma silinince senaryo kalır, kaynak bağı boşalır", !!orphan && orphan.source_message_id === null && orphan.question.includes("FL350"), `${orphan?.source_message_id}`);
+
+// Koşu sonuçları kişisel veri kopyası taşır: senaryo silinince metin maskelenir, "Koşuyu sil" koşuyu kalıcı siler.
+const [evRun] = await sql`insert into eval_runs (bot_id, target, status, started_by, summary, cost_usd) values (${bot.id}, '"draft"'::jsonb, 'done', ${admin.email}, '{}'::jsonb, 0) returning id`;
+await sql`insert into eval_results (run_id, case_id, question, mode, answer) values (${evRun.id}, ${evCase.id}, ${evTag + " soru metni"}, 'agro', ${evTag + " cevap metni"})`;
+const [evRunRunning] = await sql`insert into eval_runs (bot_id, target, status, started_by, summary, cost_usd) values (${bot.id}, '"draft"'::jsonb, 'running', ${admin.email}, ${sql.json({ lastActivityAt: new Date().toISOString() })}, 0) returning id`;
+loc = await act(EV, "deleteRun", { id: evRunRunning.id });
+const [stillRunning] = await sql`select id from eval_runs where id = ${evRunRunning.id}`;
+check("Koşu sil: çalışan koşu silinemez", loc.includes("hata=") && !!stillRunning, loc);
+await sql`delete from eval_runs where id = ${evRunRunning.id}`;
+loc = await act(EV, "deleteRun", { id: "gecersiz" });
+check("Koşu sil: geçersiz kimlik anlaşılır hata verir", loc.includes("hata="), loc);
+
+const locDelCase = await act(EV, "deleteCase", { id: evCase.id });
+const [masked] = await sql`select question, answer, case_id from eval_results where run_id = ${evRun.id}`;
+check(
+  "Senaryo silinince geçmiş sonuçtaki soru ve cevap metni temizlenir (satır kalır)",
+  locDelCase.includes("ok=") && !!masked && masked.question === "" && masked.answer === "" && masked.case_id === null,
+  locDelCase,
+);
+const evRunPage = await fetch(`${BASE}/admin/egitim/test/kosular/${evRun.id}`, cookie);
+check("Koşu sayfası: tam UUID dışı kimlik 404, geçerli koşu 200 ('Koşuyu sil' görünür)", evRunPage.status === 200 && (await evRunPage.text()).includes("Koşuyu sil") && (await fetch(`${BASE}/admin/egitim/test/kosular/${evRun.id}x`, cookie)).status === 404, `${evRunPage.status}`);
+loc = await act(EV, "deleteRun", { id: evRun.id });
+const [runGone] = await sql`select (select count(*)::int from eval_runs where id = ${evRun.id}) as runs, (select count(*)::int from eval_results where run_id = ${evRun.id}) as results`;
+check("Koşu sil: koşu ve sonuçları kalıcı silinir, audit_log'a eval.run_delete yazılır", loc.includes("ok=") && runGone.runs === 0 && runGone.results === 0 && (await evAudit("eval.run_delete", evRun.id)) === 1, loc);
+
+// Konuşmadan senaryo: geçersiz kimlikler 500 değil anlaşılır hata verir.
+loc = await act(CONV, "addCaseFromMessage", { conversationId: "gecersiz", messageId: "x", question: "soru", piiOk: "on" }, "/admin/konusmalar/00000000-0000-0000-0000-000000000000");
+check("Konuşmadan senaryo: geçersiz konuşma kimliği anlaşılır hata verir", loc.includes("hata=") && loc.includes("Konuşma bulunamadı."), loc);
+
+// "Yayındaki" hedef koşu başında sürüme sabitlenir.
+{
+  const { startEvalRun } = await import("../src/lib/eval-run");
+  const { getMainBot } = await import("../src/lib/bot");
+  const mainBot = await getMainBot();
+  const [pubCase] = await sql`insert into eval_cases (bot_id, mode, question, expect, note) values (${bot.id}, 'genel', ${evTag + " sabitleme"}, '{}'::jsonb, ${evTag}) returning id`;
+  if (mainBot.publishedVersionId) {
+    const started = await startEvalRun({ bot: mainBot, target: "published", caseIds: [pubCase.id], maxCostUsd: 100, actorEmail: admin.email });
+    const [pinned] = await sql`select target, version_number from eval_runs where id = ${started.runId}`;
+    check(
+      "Koşu: 'yayındaki' hedef koşu başında sürüm kimliğine sabitlenir (kayıtta sürüm numarası var)",
+      pinned.target?.versionId === mainBot.publishedVersionId && typeof pinned.version_number === "number",
+      JSON.stringify(pinned.target),
+    );
+    await sql`delete from eval_runs where id = ${started.runId}`;
+  }
+  await sql`delete from eval_cases where id = ${pubCase.id}`;
+}
+
+loc = locDelCase;
+const [gone] = await sql`select id from eval_cases where id = ${evCase.id}`;
+check("Senaryo: silindi ve audit_log'a eval.case_delete yazıldı", loc.includes("ok=") && !gone && (await evAudit("eval.case_delete", evCase.id)) === 1, loc);
+await sql`delete from eval_cases where question like ${evTag + "%"}`;
 
 // Kaynakları ve oluşturulan sürümleri temizle; yayındaki sürüm başlangıca dönsün.
 if (origVersion) await sql`update bots set published_version_id = ${origVersion.id} where id = ${bot.id}`;

@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMode } from "@/db/schema";
 import { cx } from "@/components/ui";
 import { describeMatch } from "@/lib/ai/retrieval-core";
+import type { TurnTarget } from "@/lib/ai/turn-core";
 import { Linkify, Markdown } from "./Markdown";
 
 export type ModeInfo = { id: ChatMode; label: string; greeting: string; suggestions: string[]; disclaimer?: string };
@@ -31,6 +32,10 @@ type Props = {
   photosEnabled: boolean;
   maxPhotoMb: number;
   toolLabels: Record<string, string>;
+  /** Yalnızca test alanı: hangi ayarlarla konuşulacağı (varsayılan taslak). Değişince konuşma yeniden başlatılmalı (key). */
+  playgroundTarget?: TurnTarget;
+  /** Test alanı başlığındaki açıklama; yoksa "Taslak ayarlarla test". */
+  playgroundLabel?: string;
 };
 
 type Init = {
@@ -275,6 +280,8 @@ function Conversation({
   photosEnabled,
   maxPhotoMb,
   toolLabels,
+  playgroundTarget,
+  playgroundLabel,
   init,
   token,
   conversationId,
@@ -327,11 +334,12 @@ function Conversation({
             mode: modeRef.current,
             location: init.location ?? null,
             playground: variant === "playground",
+            ...(variant === "playground" && playgroundTarget ? { target: playgroundTarget } : {}),
             ...(body ?? {}),
           },
         }),
       }),
-    [auth, init.location, variant],
+    [auth, init.location, variant, playgroundTarget],
   );
 
   const { messages, sendMessage, status, error, stop, clearError } = useChat({ id: conversationId, messages: history, transport });
@@ -421,7 +429,7 @@ function Conversation({
         <div className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
             <div className="truncate text-[15px] font-semibold">{current.label}</div>
-            {variant === "playground" && <div className="text-xs text-muted">Taslak ayarlarla test</div>}
+            {variant === "playground" && <div className="text-xs text-muted">{playgroundLabel ?? "Taslak ayarlarla test"}</div>}
           </div>
           <button
             type="button"

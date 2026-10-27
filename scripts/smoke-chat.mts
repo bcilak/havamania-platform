@@ -20,6 +20,28 @@ const secret = decrypt(bot.token_secret_enc);
 const appToken = (sub: string) =>
   new SignJWT({}).setProtectedHeader({ alg: "HS256" }).setSubject(sub).setIssuedAt().setExpirationTime("10m").sign(new TextEncoder().encode(secret));
 
+// Test alanı (playground) isteği yönetici oturumu ister; oturum uygulamanın SESSION_SECRET'ıyla üretilir.
+const [admin] = await sql`select id, email, name, role from admin_users where role = 'super_admin' and active order by created_at limit 1`;
+const adminCookie = `hm_admin=${await new SignJWT({ role: admin.role, email: admin.email, name: admin.name })
+  .setProtectedHeader({ alg: "HS256" })
+  .setSubject(admin.id)
+  .setAudience("admin")
+  .setIssuedAt()
+  .setExpirationTime("10m")
+  .sign(new TextEncoder().encode(process.env.SESSION_SECRET!))}`;
+
+/** Test alanı isteği; akış varsa sonuna kadar okunur. */
+async function playChat(body: Record<string, unknown>) {
+  const res = await fetch(`${BASE}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: adminCookie },
+    body: JSON.stringify({ playground: true, ...body }),
+  });
+  if (!res.ok) return { status: res.status, error: ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "" };
+  await res.text().catch(() => "");
+  return { status: res.status, error: "" };
+}
+
 async function session(deviceId: string, userToken?: string) {
   const [{ v }] = await sql`select coalesce((value->>'consentVersion')::int, 1) as v from settings where key = 'kvkk' union all select 1 limit 1`;
   const res = await fetch(`${BASE}/api/widget/session`, {
@@ -82,6 +104,15 @@ check(
   "Cevap veritabanında: araç çıktısı, token, maliyet",
   !!saved && saved.tool_calls.length === 1 && saved.tool_calls[0].output?.ok === true && saved.input_tokens > 0 && Number(saved.cost_usd) > 0,
   saved ? `${saved.model} · ${saved.input_tokens}+${saved.output_tokens} · $${saved.cost_usd}` : "yok",
+);
+// Mod ayarındaki en uzun cevap (token) sağlayıcıya max_tokens / max_completion_tokens olarak gitmeli.
+const MOCK = (process.env.MOCK_URL || "http://localhost:3199").replace(/\/$/, "");
+const lastCall = await fetch(`${MOCK}/__last-chat`).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+const [{ cap }] = await sql`select coalesce((v.config->'modes'->'genel'->>'maxOutputTokens')::int, 700) as cap from bots b join bot_versions v on v.id = b.published_version_id where b.id = ${bot.id}`;
+check(
+  "Model isteğinde max_tokens = mod ayarı (genel)",
+  lastCall === null ? true : (lastCall.max_tokens ?? lastCall.max_completion_tokens) === cap,
+  lastCall === null ? "mock /__last-chat yok (eski mock; yeniden başlatın), atlandı" : `istek ${lastCall.max_tokens ?? lastCall.max_completion_tokens} · ayar ${cap}`,
 );
 check("İstemcideki mesaj kimliği = veritabanındaki", r1.messageId === saved?.id, `${r1.messageId?.slice(0, 8)} / ${saved?.id?.slice(0, 8)}`);
 
@@ -149,6 +180,118 @@ for (const f of toolFailures) {
     m ? `${r.status} · code=${call?.output?.code} · unanswered=${m.unanswered} · error=${m.error ?? "-"}` : `kayıt yok (${r.status})`,
   );
 }
+
+/* ---------- 4d. Test alanı: sürüm seçimi (target) ---------- */
+const [pub] = await sql`select v.id, v.number from bots b join bot_versions v on v.id = b.published_version_id where b.id = ${bot.id}`;
+if (pub) {
+  const convPub = crypto.randomUUID();
+  const rp = await playChat({ conversationId: convPub, mode: "genel", text: "Merhaba, yayındaki sürümle deniyorum", target: "published" });
+  await sleep(400);
+  const [cp] = await sql`select version_number, platform from conversations where id = ${convPub}`;
+  check("Test alanı target=published: konuşma yayındaki sürüm numarasında, platform=playground", rp.status === 200 && cp?.version_number === pub.number && cp?.platform === "playground", `${rp.status} · v${cp?.version_number} / yayında v${pub.number} · ${cp?.platform}`);
+
+  const convVer = crypto.randomUUID();
+  const rv = await playChat({ conversationId: convVer, mode: "genel", text: "Belirli sürümle deniyorum", target: { versionId: pub.id } });
+  await sleep(400);
+  const [cv] = await sql`select version_number from conversations where id = ${convVer}`;
+  check("Test alanı target={versionId}: konuşma o sürümün numarasında", rv.status === 200 && cv?.version_number === pub.number, `${rv.status} · v${cv?.version_number}`);
+}
+const convDraft = crypto.randomUUID();
+const rd = await playChat({ conversationId: convDraft, mode: "genel", text: "Taslakla deniyorum" });
+await sleep(400);
+const [cd] = await sql`select version_number from conversations where id = ${convDraft}`;
+check("Test alanı varsayılan hedef taslak: version_number boş", rd.status === 200 && cd?.version_number === null, `${rd.status} · ${cd?.version_number}`);
+const badVer = await playChat({ conversationId: crypto.randomUUID(), mode: "genel", text: "x", target: { versionId: crypto.randomUUID() } });
+const badVer2 = await playChat({ conversationId: crypto.randomUUID(), mode: "genel", text: "x", target: { versionId: "gecersiz" } });
+check("Test alanı: bu bota ait olmayan / geçersiz versionId 404 'Sürüm bulunamadı.'", badVer.status === 404 && badVer2.status === 404 && badVer.error === "Sürüm bulunamadı.", `${badVer.status},${badVer2.status} · ${badVer.error}`);
+const badTarget = await playChat({ conversationId: crypto.randomUUID(), mode: "genel", text: "x", target: "baska" });
+check("Test alanı: geçersiz target biçimi 400", badTarget.status === 400, `${badTarget.status}`);
+const noAdmin = await fetch(`${BASE}/api/chat`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ conversationId: crypto.randomUUID(), mode: "genel", text: "x", playground: true, target: "published" }),
+});
+check("Test alanı: oturumsuz istek 401", noAdmin.status === 401, `${noAdmin.status}`);
+// Widget isteğinde target yok sayılır: geçersiz sürüm kimliği bile hata vermez, konuşma yayındaki sürümde açılır.
+const convWidget = crypto.randomUUID();
+const rw = await chat(s2.token, { conversationId: convWidget, mode: "genel", text: "Widget target'ı yok saymalı", target: { versionId: crypto.randomUUID() } });
+await sleep(400);
+const [cw] = await sql`select version_number, platform from conversations where id = ${convWidget}`;
+check("Widget isteğinde target yok sayılır (yayındaki sürüm, playground değil)", rw.status === 200 && (!pub || cw?.version_number === pub.number) && cw?.platform !== "playground", `${rw.status} · v${cw?.version_number} · ${cw?.platform}`);
+
+/* ---------- 4e. Kayıtlı test senaryoları: koşu konuşma yazmaz; ölçütler, maliyet sınırı, tek koşu, iptal, yarıda kalan ---------- */
+// Koşu motoru süreç içinde çağrılır (eylem yalnızca after() ile aynı fonksiyonu çalıştırır).
+const { getMainBot } = await import("../src/lib/bot");
+const { cancelEvalRun, executeEvalRun, startEvalRun } = await import("../src/lib/eval-run");
+const evBot = await getMainBot();
+const evTag = `smoke-eval-${Date.now()}`;
+const [kbE2e] = await sql`select id from kb_sources where bot_id = ${bot.id} and title = 'E2E SSS' order by created_at desc limit 1`;
+const mkCase = async (question: string, expect: Record<string, unknown>) =>
+  (await sql`insert into eval_cases (bot_id, mode, question, expect, note, created_by) values (${bot.id}, 'genel', ${question}, ${sql.json(expect as never)}, ${evTag}, 'smoke') returning id`)[0].id as string;
+const caseA = await mkCase("Zirvepulsar katsayısı nedir?", { mustInclude: ["ZİRVEPULSAR"], mustNotInclude: ["kesinlikle bilmiyorum"], expectSourceId: kbE2e?.id ?? null, expectUnanswered: false });
+const caseB = await mkCase("Yarın hava nasıl olacak?", { mustInclude: [], mustNotInclude: [], expectTool: "agro_conditions" });
+const caseC = await mkCase("Zirvepulsar katsayısı nedir, bir daha söyler misin?", { mustInclude: ["test cevabı"], mustNotInclude: [] });
+const count = async () => {
+  const [{ m, c }] = await sql`select (select count(*)::int from messages) as m, (select count(*)::int from conversations) as c`;
+  return { m: m as number, c: c as number };
+};
+const toCaseRow = (c: Record<string, unknown>) =>
+  ({ id: c.id, botId: c.bot_id, mode: c.mode, question: c.question, location: c.location, expect: c.expect, note: c.note, sourceMessageId: null, createdBy: c.created_by, createdAt: c.created_at, updatedAt: null }) as never;
+const before = await count();
+const started = await startEvalRun({ bot: evBot, target: "published", caseIds: [caseA, caseB], maxCostUsd: 1, actorEmail: "smoke" });
+let dupMsg = "";
+try {
+  await startEvalRun({ bot: evBot, target: "published", caseIds: [caseA], maxCostUsd: 1, actorEmail: "smoke" });
+} catch (e) {
+  dupMsg = (e as Error).message;
+}
+check("Senaryo koşusu: çalışan koşu varken ikinci koşu reddedilir", dupMsg.includes("Zaten çalışan"), dupMsg);
+await executeEvalRun({ runId: started.runId, bot: evBot, target: started.target, cases: started.cases, maxCostUsd: started.maxCostUsd });
+const [run1] = await sql`select status, summary, cost_usd, version_number from eval_runs where id = ${started.runId}`;
+const res1 = await sql`select case_id, passed, checks, sources, tool_calls, input_tokens, cost_usd, latency_ms from eval_results where run_id = ${started.runId}`;
+const rA = res1.find((r) => r.case_id === caseA);
+const rB = res1.find((r) => r.case_id === caseB);
+check("Senaryo koşusu: done, 2 sonuç, biri geçti biri kaldı", run1?.status === "done" && res1.length === 2 && rA?.passed === true && rB?.passed === false, `${run1?.status} · ${res1.length} sonuç · A=${rA?.passed} B=${rB?.passed}`);
+check(
+  "Senaryo koşusu: kalma nedeni (araç), kaynak ve token/maliyet/gecikme kaydedildi",
+  !!rB && (rB.checks as { ok: boolean; id: string }[]).some((c) => c.id === "tool" && !c.ok) && !!rA && (rA.sources as unknown[]).length > 0 && rA.input_tokens > 0 && Number(run1.cost_usd) > 0 && rA.latency_ms >= 0 && run1.summary.passed === 1 && run1.summary.failed === 1,
+  `kaynak ${(rA?.sources as unknown[])?.length} · $${run1?.cost_usd}`,
+);
+const after1 = await count();
+check("Senaryo koşusu konuşma/mesaj yazmaz (messages ve conversations sayısı değişmedi)", after1.m === before.m && after1.c === before.c, `mesaj ${before.m}→${after1.m} · konuşma ${before.c}→${after1.c}`);
+
+// Başlamadan tahmin: önceki koşudan ortalama maliyet bilinir; sınır çok düşükse koşu hiç başlamaz.
+let estMsg = "";
+try {
+  await startEvalRun({ bot: evBot, target: "draft", caseIds: [caseA, caseB, caseC], maxCostUsd: 0.000001, actorEmail: "smoke" });
+} catch (e) {
+  estMsg = (e as Error).message;
+}
+check("Senaryo koşusu: tahmini maliyet sınırı aşarsa başlamaz", estMsg.includes("Tahmini maliyet"), estMsg);
+
+// Koşu sırasında maliyet sınırı: kayıt elle açılır (tahmin kapısını atlar), motor ilk iki senaryodan sonra durur.
+const runSummary = (total: number, maxCostUsd: number, lastActivityAt = new Date().toISOString()) => ({ total, completed: 0, passed: 0, failed: 0, unchecked: 0, maxCostUsd, skipped: 0, lastActivityAt });
+const [limRun] = await sql`insert into eval_runs (bot_id, target, status, started_by, summary) values (${bot.id}, ${sql.json("published")}, 'running', 'smoke', ${sql.json(runSummary(3, 0.000001))}) returning id`;
+const limCases = (await sql`select * from eval_cases where id in ${sql([caseA, caseB, caseC])} order by created_at`).map(toCaseRow);
+await executeEvalRun({ runId: limRun.id, bot: evBot, target: "published", cases: limCases, maxCostUsd: 0.000001 });
+const [limDone] = await sql`select status, summary, (select count(*)::int from eval_results where run_id = ${limRun.id}) as n from eval_runs where id = ${limRun.id}`;
+check("Senaryo koşusu: maliyet sınırı aşılınca durur, kalan senaryo çalışmaz", limDone?.status === "done" && limDone.summary.stoppedBy === "cost" && limDone.n < 3 && limDone.summary.skipped >= 1, `${limDone?.status} · ${limDone?.n}/3 sonuç · stoppedBy=${limDone?.summary?.stoppedBy}`);
+
+// İptal: iptal edilmiş koşuda hiçbir senaryo çalışmaz.
+const [canRun] = await sql`insert into eval_runs (bot_id, target, status, started_by, summary) values (${bot.id}, ${sql.json("published")}, 'running', 'smoke', ${sql.json(runSummary(3, 1))}) returning id`;
+const cancelled = await cancelEvalRun(bot.id, canRun.id);
+await executeEvalRun({ runId: canRun.id, bot: evBot, target: "published", cases: limCases, maxCostUsd: 1 });
+const [canDone] = await sql`select status, (select count(*)::int from eval_results where run_id = ${canRun.id}) as n from eval_runs where id = ${canRun.id}`;
+check("Senaryo koşusu: iptal edilen koşuda senaryo çalışmaz, durum cancelled kalır", cancelled && canDone?.status === "cancelled" && canDone.n === 0, `${canDone?.status} · ${canDone?.n} sonuç`);
+
+// Yarıda kalan: 40 dakikadır ilerlemeyen "running" koşu yeni koşuyu engellemez ve failed olur.
+const [staleRun] = await sql`insert into eval_runs (bot_id, target, status, started_by, started_at, summary) values (${bot.id}, ${sql.json("published")}, 'running', 'smoke', now() - interval '40 minutes', ${sql.json(runSummary(1, 1, new Date(Date.now() - 40 * 60_000).toISOString()))}) returning id`;
+const afterStale = await startEvalRun({ bot: evBot, target: "published", caseIds: [caseA], maxCostUsd: 1, actorEmail: "smoke" });
+const [staleNow] = await sql`select status from eval_runs where id = ${staleRun.id}`;
+check("Senaryo koşusu: 15 dakikadır ilerlemeyen koşu 'failed' olur, yeni koşu başlar", staleNow?.status === "failed" && !!afterStale.runId, `${staleNow?.status}`);
+
+await sql`delete from eval_runs where started_by = 'smoke' and bot_id = ${bot.id}`;
+await sql`delete from eval_cases where note = ${evTag}`;
 
 /* ---------- 5. Hız sınırı ---------- */
 let limited = 0;

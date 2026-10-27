@@ -79,6 +79,40 @@ export type SourceRecord = {
   rank?: number;
 };
 
+/** Kayıtlı test senaryosunun beklenen ölçütleri (hepsi isteğe bağlı; deterministik kontrol). */
+export type EvalExpect = {
+  /** Cevapta geçmesi gereken ifadeler (Türkçe küçük harfe çevrilerek aranır). */
+  mustInclude: string[];
+  /** Cevapta geçmemesi gereken ifadeler. */
+  mustNotInclude: string[];
+  /** Araç adı ya da "any" (herhangi bir araç çağrılmalı). */
+  expectTool?: string | null;
+  /** İlgili kaynaklar arasında bulunması gereken kaynak kimliği. */
+  expectSourceId?: string | null;
+  /** true: cevapsız işaretlenmeli; false: cevaplı olmalı. */
+  expectUnanswered?: boolean | null;
+};
+
+export type EvalCheck = { id: string; label: string; ok: boolean; detail?: string };
+export type EvalRunStatus = "running" | "done" | "failed" | "cancelled";
+/** Koşunun hedefi: "draft" | "published" | { versionId } (TurnTarget ile aynı biçim). */
+export type EvalTarget = "draft" | "published" | { versionId: string };
+export type EvalRunSummary = {
+  total: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  /** Ölçütsüz (değerlendirilmeyen) senaryo sayısı. */
+  unchecked: number;
+  maxCostUsd: number;
+  /** Çalıştırılmayan (maliyet sınırı ya da iptal) senaryo sayısı. */
+  skipped: number;
+  stoppedBy?: "cost" | "cancel" | null;
+  /** Son ilerleme zamanı (ISO); yarıda kalan koşuyu ayırt etmek için. */
+  lastActivityAt: string;
+  error?: string | null;
+};
+
 /* ---------- Admin ---------- */
 
 export const adminUsers = pgTable("admin_users", {
@@ -359,6 +393,9 @@ export const corrections = pgTable("corrections", {
   kbSourceId: uuid("kb_source_id").references(() => kbSources.id, { onDelete: "set null" }),
   createdBy: text("created_by"),
   createdAt: created(),
+  /** Düzeltme sonradan düzenlendiyse (bilgi tabanı kaynak ayrıntısından). */
+  updatedAt: timestamp("updated_at", { withTimezone: true }),
+  updatedBy: text("updated_by"),
 });
 
 export const deletionRequests = pgTable("deletion_requests", {
@@ -372,6 +409,83 @@ export const deletionRequests = pgTable("deletion_requests", {
   requestedBy: text("requested_by"),
   createdAt: created(),
 });
+
+/* ---------- Test senaryoları ve koşular (regresyon seti) ---------- */
+
+/**
+ * Kayıtlı test senaryosu. `question` konuşmadan kopyalanmışsa kişisel veri içerebilir;
+ * kaynak mesaj/konuşma silinince senaryo bağımsız kalır (`set null`), `question` silinmez.
+ * Koşular konuşma ve mesaj tablolarına yazmaz.
+ */
+export const evalCases = pgTable(
+  "eval_cases",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    botId: uuid("bot_id")
+      .references(() => bots.id, { onDelete: "cascade" })
+      .notNull(),
+    mode: text("mode").$type<ChatMode>().notNull(),
+    question: text("question").notNull(),
+    location: jsonb("location").$type<{ lat: number; lon: number; name?: string } | null>(),
+    expect: jsonb("expect").$type<EvalExpect>().notNull(),
+    note: text("note"),
+    sourceMessageId: uuid("source_message_id").references(() => messages.id, { onDelete: "set null" }),
+    createdBy: text("created_by"),
+    createdAt: created(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }),
+  },
+  (t) => [index("eval_cases_bot_idx").on(t.botId, t.createdAt)],
+);
+
+export const evalRuns = pgTable(
+  "eval_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    botId: uuid("bot_id")
+      .references(() => bots.id, { onDelete: "cascade" })
+      .notNull(),
+    target: jsonb("target").$type<EvalTarget>().notNull(),
+    versionNumber: integer("version_number"),
+    status: text("status").$type<EvalRunStatus>().default("running").notNull(),
+    startedBy: text("started_by"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    summary: jsonb("summary").$type<EvalRunSummary>(),
+    costUsd: numeric("cost_usd", { precision: 12, scale: 6, mode: "number" }),
+  },
+  (t) => [
+    index("eval_runs_bot_idx").on(t.botId, t.startedAt),
+    // Bot başına aynı anda tek koşu (yarışta bile): ikinci "running" kaydı eklenemez.
+    uniqueIndex("eval_runs_one_running_idx").on(t.botId).where(sql`${t.status} = 'running'`),
+  ],
+);
+
+export const evalResults = pgTable(
+  "eval_results",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .references(() => evalRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    caseId: uuid("case_id").references(() => evalCases.id, { onDelete: "set null" }),
+    question: text("question").notNull(),
+    mode: text("mode").$type<ChatMode>().notNull(),
+    answer: text("answer").default("").notNull(),
+    sources: jsonb("sources").$type<SourceRecord[]>().default([]).notNull(),
+    toolCalls: jsonb("tool_calls").$type<ToolCallRecord[]>().default([]).notNull(),
+    checks: jsonb("checks").$type<EvalCheck[]>().default([]).notNull(),
+    /** null: senaryoda ölçüt yok, değerlendirilmedi. */
+    passed: boolean("passed"),
+    unanswered: boolean("unanswered").default(false).notNull(),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    costUsd: numeric("cost_usd", { precision: 12, scale: 6, mode: "number" }),
+    latencyMs: integer("latency_ms"),
+    error: text("error"),
+    createdAt: created(),
+  },
+  (t) => [index("eval_results_run_idx").on(t.runId), index("eval_results_case_idx").on(t.caseId), index("eval_results_run_created_idx").on(t.runId, t.createdAt)],
+);
 
 /* ---------- CMS ---------- */
 

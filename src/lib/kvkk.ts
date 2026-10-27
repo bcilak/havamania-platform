@@ -36,7 +36,12 @@ export async function countExpired(retentionDays: number): Promise<number> {
   return n;
 }
 
-/** Bir kişinin tüm verisini siler (KVKK md. 11 silme talebi). */
+/**
+ * Bir kişinin tüm verisini siler (KVKK md. 11 silme talebi).
+ * Kapsam dışı: konuşmadan kopyalanıp kaydedilmiş test senaryoları (eval_cases) ve koşu sonuçları
+ * (eval_results) kullanıcıya bağlı değildir; gerekiyorsa panelden elle silinmelidir
+ * (senaryo silinince sonuçlardaki soru/cevap da temizlenir; "Koşuyu sil" koşuyu tümüyle siler).
+ */
 export async function deleteUserData(identifier: string, type: "device" | "external_user", requestedBy: string) {
   const users = await db
     .select({ id: appUsers.id })

@@ -9,6 +9,7 @@ import {
   publishableSourceIds as pickPublishable,
   type KbRow,
 } from "@/lib/ai/kb-lifecycle";
+import type { SourcePatch } from "@/lib/ai/kb-edit-core";
 import { storage } from "@/lib/storage";
 
 type SourceRow = typeof kbSources.$inferSelect;
@@ -97,17 +98,33 @@ export async function purgeSummary(botId: string): Promise<{ stillUsed: SourceRo
   return { stillUsed: sources.filter((s) => s.deletedAt && protectedIds.has(s.id)), purgeable };
 }
 
+/** Kaynak yayındaki sürümde mi, yayındaki ya da geri alınabilir bir sürümde mi (düzenleme/yeniden işleme yeni satır açar). */
+export async function sourceUsage(botId: string, id: string): Promise<{ published: boolean; versioned: boolean }> {
+  const { protectedIds, publishedIds } = await frozenIds(botId);
+  return { published: publishedIds.has(id), versioned: protectedIds.has(id) };
+}
+
 /**
  * Yeniden işlenecek satırı hazırlar. Kaynak bir sürümde geçiyorsa (yayında ya da
  * geri alınabilir sürümlerde) yerinde değiştirilmez: yeni bir satır açılır,
  * eskisi ona bağlanır ve yayın o satırı kullanmaya devam eder. Aksi halde aynı
  * satır işlenir. İşlenecek satırın id'sini döner; silinmiş kaynak için null.
  *
+ * `patch` (başlık, mod, soru, cevap) düzenlemeyi taşır: korunan kaynakta yeni satıra,
+ * korunmayanda aynı satıra uygulanır. `opts.syncCorrection` verilirse düzeltme
+ * kaynağının `corrections` kaydı da aynı transaction'da güncellenir (soru, cevap, mod,
+ * updated_at/by); kb_source_id yeni satıra taşınmış olur.
+ *
  * Her şey tek transaction'da: bot satırı (yayınla yarışmasın) ve zincirin satırları
  * `for update` ile kilitlenir. Eşzamanlı ikinci çağrı kilidi bekler, birincinin
  * açtığı halefi görür ve yeni halef açmak yerine onu yeniden işler.
  */
-export async function beginReprocess(botId: string, sourceId: string, patch?: { answer?: string }): Promise<string | null> {
+export async function beginReprocess(
+  botId: string,
+  sourceId: string,
+  patch?: SourcePatch,
+  opts?: { syncCorrection?: { actorEmail: string } },
+): Promise<string | null> {
   return db.transaction(async (tx) => {
     // Kilit sırası: bots -> kb_sources (zincirde eskiden yeniye). Yayın da bots'u önce kilitler.
     // "no key update": yayınla (for update) yine çakışır; bots'a anahtar referansı veren eklemeleri (mesaj vb.) bloklamaz.
@@ -124,33 +141,56 @@ export async function beginReprocess(botId: string, sourceId: string, patch?: { 
     }
     if (!head || head.deletedAt) return null;
 
+    const fields = {
+      ...(patch?.title !== undefined ? { title: patch.title } : {}),
+      ...(patch?.mode !== undefined ? { mode: patch.mode as SourceRow["mode"] } : {}),
+      ...(patch?.question !== undefined ? { question: patch.question } : {}),
+      ...(patch?.answer !== undefined ? { answer: patch.answer } : {}),
+    };
+    const merged = { ...head, ...fields };
+
     const { protectedIds } = await frozenIds(botId, tx);
+    let finalId: string;
     if (!protectedIds.has(head.id)) {
       await tx
         .update(kbSources)
-        .set({ status: "pending", ...(patch?.answer !== undefined ? { answer: patch.answer } : {}), updatedAt: new Date() })
+        .set({ status: "pending", ...fields, updatedAt: new Date() })
         .where(eq(kbSources.id, head.id));
-      return head.id;
+      finalId = head.id;
+    } else {
+      const [next] = await tx
+        .insert(kbSources)
+        .values({
+          botId: head.botId,
+          type: head.type,
+          mode: merged.mode,
+          title: merged.title,
+          storageKey: head.storageKey,
+          mediaType: head.mediaType,
+          url: head.url,
+          question: merged.question,
+          answer: merged.answer,
+          priority: head.priority,
+          createdBy: head.createdBy,
+        })
+        .returning({ id: kbSources.id });
+      await tx.update(kbSources).set({ supersededBy: next.id }).where(eq(kbSources.id, head.id));
+      await tx.update(corrections).set({ kbSourceId: next.id }).where(eq(corrections.kbSourceId, head.id));
+      finalId = next.id;
     }
 
-    const [next] = await tx
-      .insert(kbSources)
-      .values({
-        botId: head.botId,
-        type: head.type,
-        mode: head.mode,
-        title: head.title,
-        storageKey: head.storageKey,
-        mediaType: head.mediaType,
-        url: head.url,
-        question: head.question,
-        answer: patch?.answer !== undefined ? patch.answer : head.answer,
-        priority: head.priority,
-        createdBy: head.createdBy,
-      })
-      .returning({ id: kbSources.id });
-    await tx.update(kbSources).set({ supersededBy: next.id }).where(eq(kbSources.id, head.id));
-    await tx.update(corrections).set({ kbSourceId: next.id }).where(eq(corrections.kbSourceId, head.id));
-    return next.id;
+    if (opts?.syncCorrection && head.type === "correction") {
+      await tx
+        .update(corrections)
+        .set({
+          question: merged.question ?? "",
+          correctAnswer: merged.answer ?? "",
+          mode: merged.mode,
+          updatedAt: new Date(),
+          updatedBy: opts.syncCorrection.actorEmail,
+        })
+        .where(eq(corrections.kbSourceId, finalId));
+    }
+    return finalId;
   });
 }

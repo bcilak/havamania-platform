@@ -116,17 +116,30 @@ export function CopyButton({ text, label = "Kopyala", className }: { text: strin
   );
 }
 
-/** Karakter sayaçlı textarea. Sınır sunucuda da denetlenir (strStrict); burada yalnızca kullanıcıyı bilgilendirir. */
+/** Karakter sayaçlı textarea. Sınır sunucuda da denetlenir (strStrict); burada yalnızca kullanıcıyı bilgilendirir. `value` verilirse kontrollüdür. */
 export function CountedTextarea({
   max,
   defaultValue,
+  value,
   className,
+  onChange,
   ...rest
-}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "maxLength" | "defaultValue"> & { max: number; defaultValue?: string }) {
-  const [length, setLength] = useState((defaultValue ?? "").length);
+}: Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "maxLength" | "defaultValue" | "value"> & { max: number; defaultValue?: string; value?: string }) {
+  const [typed, setTyped] = useState((defaultValue ?? "").length);
+  const length = value !== undefined ? value.length : typed;
   return (
     <div className="grid gap-1">
-      <textarea {...rest} defaultValue={defaultValue} maxLength={max} className={className} onChange={(e) => setLength(e.currentTarget.value.length)} />
+      <textarea
+        {...rest}
+        value={value}
+        defaultValue={defaultValue}
+        maxLength={max}
+        className={className}
+        onChange={(e) => {
+          setTyped(e.currentTarget.value.length);
+          onChange?.(e);
+        }}
+      />
       <span className={cx("tabular text-right text-xs", length >= max * 0.9 ? "text-warn" : "text-muted")}>
         {length} / {max}
       </span>

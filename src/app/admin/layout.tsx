@@ -48,6 +48,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         { href: "/admin/egitim/kisilik", label: "Kişilik ve ton", icon: "persona", perm: "training" },
         { href: "/admin/egitim/duzeltmeler", label: "Düzeltmeler", icon: "corrections", perm: "training" },
         { href: "/admin/egitim/test", label: "Test alanı", icon: "test", perm: "training" },
+        { href: "/admin/egitim/test/senaryolar", label: "Test senaryoları", icon: "scenarios", perm: "training" },
       ],
     },
     {

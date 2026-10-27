@@ -3,13 +3,16 @@ import { describe, it } from "node:test";
 import {
   diffSources,
   draftSourceIds,
+  chainOf,
   headOf,
+  indexRows,
   lineageOf,
   pendingIndexCount,
   planPurge,
   planRemoval,
   protectedSourceIds,
   publishableSourceIds,
+  sourceState,
   type KbRow,
 } from "./kb-lifecycle";
 
@@ -177,5 +180,33 @@ describe("pendingIndexCount", () => {
 
   it("silinmiş kaynaklar sayılmaz; hepsi hazırsa 0", () => {
     assert.equal(pendingIndexCount([row("a", { status: "pending", deletedAt: DELETED }), row("b")]), 0);
+  });
+});
+
+describe("sourceState (sürüm detayındaki kaynak durumu)", () => {
+  it("etkin, silinmiş, yeniden işlenmiş ve temizlenmiş satırları ayırt eder", () => {
+    const byId = indexRows([row("a"), row("b", { deletedAt: DELETED }), row("c", { supersededBy: "a" })]);
+    assert.equal(sourceState("a", byId), "active");
+    assert.equal(sourceState("b", byId), "deleted");
+    assert.equal(sourceState("c", byId), "superseded");
+    assert.equal(sourceState("yok", byId), "missing");
+  });
+
+  it("silinmiş ve halefli satır silinmiş sayılır", () => {
+    assert.equal(sourceState("a", indexRows([row("a", { deletedAt: DELETED, supersededBy: "b" })])), "deleted");
+  });
+});
+
+describe("chainOf", () => {
+  const rows = [row("a", { supersededBy: "b" }), row("b", { supersededBy: "c" }), row("c"), row("x")];
+  it("herhangi bir halkadan eskiden yeniye tüm zinciri verir", () => {
+    for (const id of ["a", "b", "c"]) assert.deepEqual(chainOf(id, rows), ["a", "b", "c"]);
+  });
+  it("zincirsiz kaynak yalnızca kendisidir", () => {
+    assert.deepEqual(chainOf("x", rows), ["x"]);
+  });
+  it("kayıp bağda baş son bulunan satırdır; döngüde sonlanır", () => {
+    assert.deepEqual(chainOf("a", [row("a", { supersededBy: "gone" })]), ["a"]);
+    assert.deepEqual(chainOf("a", [row("a", { supersededBy: "b" }), row("b", { supersededBy: "a" })]).length, 2);
   });
 });

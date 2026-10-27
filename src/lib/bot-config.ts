@@ -33,6 +33,17 @@ export const TONES: Record<ToneId, { label: string; rule: string }> = {
   },
 };
 
+/** Kişilik alanlarının sınırları; form (strStrict), normalize ve prompt aynı değerleri kullanır. */
+export const PERSONA_LIMITS = {
+  maxOutputTokens: { min: 100, max: 4000 },
+  examples: { count: 5, chars: 1500 },
+  blockedTopics: { count: 20, chars: 80 },
+  toneRule: 500,
+} as const;
+
+/** Mod bazlı varsayılan azami çıktı token'ı. */
+export const DEFAULT_MAX_OUTPUT: Record<ChatMode, number> = { genel: 700, agro: 800, fly: 900 };
+
 export type ToolId = "current_weather" | "forecast" | "agro_conditions" | "flight_weather";
 
 export const TOOLS: Record<ToolId, { label: string; description: string }> = {
@@ -62,7 +73,17 @@ export type ModeConfig = {
   tools: ToolId[];
   greeting: string;
   suggestions: string[];
+  /**
+   * Cevabın azami uzunluğu (token). Taslakta ve yeni yayında her zaman dolu; bu alan eklenmeden
+   * yayınlanmış eski sürümlerde tanımsızdır (dondurulmuş sürüm: sınır yok). Muhakeme modellerinde
+   * gönderilen sınıra düşünme payı eklenir (bkz. `effectiveMaxOutputTokens`).
+   */
+  maxOutputTokens?: number;
+  /** Örnek konuşmalar (few-shot); prompta veri olarak girer, geçmişe eklenmez. */
+  examples: ExampleChat[];
 };
+
+export type ExampleChat = { user: string; assistant: string };
 
 export type BotConfig = {
   modes: Record<ChatMode, ModeConfig>;
@@ -79,7 +100,17 @@ export type BotConfig = {
   retrievalMinSimilarity: number;
   /** Alanda her yerde geçtiği için aramada ayırt edici olmayan kelimeler. */
   domainStopwords: string[];
+  /** Asistanın yardım etmeyeceği konular (genel kurallara madde olarak eklenir). */
+  blockedTopics: string[];
+  /** Panelden düzenlenen ton metinleri; olmayan ton varsayılanı (TONES) kullanır. */
+  toneOverrides: Partial<Record<ToneId, string>>;
 };
+
+/** Tonun etkin kuralı: varsa düzenlenmiş metin, yoksa varsayılan. */
+export function toneRule(toneOverrides: BotConfig["toneOverrides"] | undefined, tone: ToneId): string {
+  const t = Object.hasOwn(TONES, tone) ? tone : "dengeli";
+  return toneOverrides?.[t]?.trim() || TONES[t].rule;
+}
 
 export function defaultBotConfig(): BotConfig {
   return {
@@ -93,6 +124,8 @@ export function defaultBotConfig(): BotConfig {
         providerId: null,
         model: null,
         temperature: 0.4,
+        maxOutputTokens: DEFAULT_MAX_OUTPUT.genel,
+        examples: [],
         tools: ["current_weather", "forecast"],
         greeting: "Merhaba! Bugünün havasını ya da bir seyahat planını birlikte değerlendirelim mi?",
         suggestions: ["Bugün şemsiye gerekir mi?", "Hafta sonu piknik için hangi gün uygun?", "Ne giymeliyim?"],
@@ -106,6 +139,8 @@ export function defaultBotConfig(): BotConfig {
         providerId: null,
         model: null,
         temperature: 0.3,
+        maxOutputTokens: DEFAULT_MAX_OUTPUT.agro,
+        examples: [],
         tools: ["current_weather", "forecast", "agro_conditions"],
         greeting: "Merhaba! Hangi ürün ve bölge için bakalım?",
         suggestions: ["Bu hafta ilaçlama için en iyi gün?", "Yarın sulama yapmalı mıyım?", "Don riski var mı?"],
@@ -119,6 +154,8 @@ export function defaultBotConfig(): BotConfig {
         providerId: null,
         model: null,
         temperature: 0.2,
+        maxOutputTokens: DEFAULT_MAX_OUTPUT.fly,
+        examples: [],
         tools: ["current_weather", "flight_weather"],
         greeting: "Rotanı ve planladığın seviyeyi yazarsan özetleyeyim.",
         suggestions: ["IST → ESB rotasında türbülans var mı?", "FL350'de rüzgâr nasıl?", "Buzlanma riski?"],
@@ -134,14 +171,63 @@ export function defaultBotConfig(): BotConfig {
     retrievalTopK: 6,
     retrievalMinSimilarity: 0.3,
     domainStopwords: ["hava", "durumu", "durum", "nasıl", "olacak"],
+    blockedTopics: [],
+    toneOverrides: {},
   };
 }
 
-/** Eski kayıtlarda eksik kalan alanları varsayılanlarla tamamlar. */
-export function normalizeBotConfig(input: Partial<BotConfig> | null | undefined): BotConfig {
+export function clampMaxOutputTokens(value: unknown, fallback: number): number {
+  const n = typeof value === "number" ? Math.round(value) : Number.NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(PERSONA_LIMITS.maxOutputTokens.max, Math.max(PERSONA_LIMITS.maxOutputTokens.min, n));
+}
+
+function cleanExamples(value: unknown): ExampleChat[] {
+  if (!Array.isArray(value)) return [];
+  const max = PERSONA_LIMITS.examples.chars;
+  return value
+    .filter((e): e is ExampleChat => !!e && typeof e.user === "string" && typeof e.assistant === "string")
+    .map((e) => ({ user: e.user.trim().slice(0, max), assistant: e.assistant.trim().slice(0, max) }))
+    .filter((e) => e.user && e.assistant)
+    .slice(0, PERSONA_LIMITS.examples.count);
+}
+
+function cleanTopics(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const topics = value.filter((t): t is string => typeof t === "string").map((t) => t.trim().slice(0, PERSONA_LIMITS.blockedTopics.chars)).filter(Boolean);
+  return [...new Set(topics)].slice(0, PERSONA_LIMITS.blockedTopics.count);
+}
+
+function cleanToneOverrides(value: unknown): BotConfig["toneOverrides"] {
+  const out: BotConfig["toneOverrides"] = {};
+  if (!value || typeof value !== "object") return out;
+  for (const t of Object.keys(TONES) as ToneId[]) {
+    const v = (value as Record<string, unknown>)[t];
+    if (typeof v === "string" && v.trim()) out[t] = v.trim().slice(0, PERSONA_LIMITS.toneRule);
+  }
+  return out;
+}
+
+/**
+ * Eski kayıtlarda eksik kalan alanları varsayılanlarla tamamlar.
+ * `frozen: true` (yayınlanmış sürümler): sürüm yayınlandığı gibi kalır; sonradan eklenen
+ * `maxOutputTokens` eski sürümde tanımsız kalır (varsayılan uygulanmaz, sınır yok).
+ * Taslak ve yeni yayın varsayılanlarla tamamlanır.
+ */
+export function normalizeBotConfig(input: Partial<BotConfig> | null | undefined, opts: { frozen?: boolean } = {}): BotConfig {
   const d = defaultBotConfig();
   if (!input) return d;
   const modes = { ...d.modes };
-  for (const m of MODES) modes[m] = { ...d.modes[m], ...(input.modes?.[m] ?? {}) };
-  return { ...d, ...input, modes };
+  for (const m of MODES) {
+    const merged = { ...d.modes[m], ...(input.modes?.[m] ?? {}) };
+    const stored = input.modes?.[m]?.maxOutputTokens;
+    const hasStored = typeof stored === "number" && Number.isFinite(stored);
+    modes[m] = {
+      ...merged,
+      maxOutputTokens: opts.frozen && !hasStored ? undefined : clampMaxOutputTokens(merged.maxOutputTokens, DEFAULT_MAX_OUTPUT[m]),
+      examples: cleanExamples(merged.examples),
+    };
+  }
+  const merged = { ...d, ...input, modes };
+  return { ...merged, blockedTopics: cleanTopics(merged.blockedTopics), toneOverrides: cleanToneOverrides(merged.toneOverrides) };
 }

@@ -48,3 +48,30 @@ export function missingModels(
   }
   return out;
 }
+
+/** Muhakeme (düşünme) token'ı için çıktı sınırına eklenen pay ve toplam üst sınır. */
+export const REASONING_HEADROOM = 2048;
+export const REASONING_MAX_OUTPUT = 8000;
+
+/**
+ * Muhakeme yapan model mi (bilinen adlara göre): o1/o3/o4 serisi, gpt-5*, Gemini 2.5 ailesi
+ * (pro, flash, flash-lite), adında "thinking" / "reasoning" / "reasoner" geçenler (Claude ve
+ * Gemini düşünme varyantları dahil). Bilinmeyen model için false.
+ * Bu modellerde `maxOutputTokens` düşünme token'larını da kapsar.
+ */
+export function isReasoningModel(modelId: string | null | undefined): boolean {
+  const id = (modelId ?? "").toLowerCase();
+  if (!id) return false;
+  return /(^|[/:])o[134](-|$)/.test(id) || /(^|[/:])gpt-5/.test(id) || /(^|[/:])gemini-2\.5(-|$)/.test(id) || /thinking|reasoning|reasoner/.test(id);
+}
+
+/**
+ * Sağlayıcıya gönderilecek çıktı sınırı. Tanımsız (eski sürüm) ise sınır yoktur.
+ * Muhakeme modelinde ayarlanan değere düşünme payı eklenir (toplam en çok 8000);
+ * ayarın kendisi zaten bundan büyükse olduğu gibi kalır.
+ */
+export function effectiveMaxOutputTokens(configured: number | undefined, reasoning: boolean): number | undefined {
+  if (configured === undefined) return undefined;
+  if (!reasoning) return configured;
+  return Math.max(configured, Math.min(configured + REASONING_HEADROOM, REASONING_MAX_OUTPUT));
+}

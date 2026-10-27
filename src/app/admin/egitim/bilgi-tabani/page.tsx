@@ -1,10 +1,12 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import Link from "next/link";
+import { and, desc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { BookOpen, FileText, Globe, MessageCircle, PenLine, Search, Sparkles } from "lucide-react";
 import { db } from "@/db";
 import { kbSources, providers, type ChatMode, type KbSourceType } from "@/db/schema";
 import { AutoRefresh } from "@/components/admin/AutoRefresh";
-import { ConfirmButton, CountedTextarea, SubmitButton } from "@/components/client";
-import { Badge, btn, EmptyState, Field, Flash, inputCls, Notice, PageHeader, Panel, selectCls, TableWrap, Tabs, td, textareaCls, th } from "@/components/ui";
+import { SourceForm } from "@/components/admin/SourceForm";
+import { ConfirmButton, SubmitButton } from "@/components/client";
+import { Badge, btn, EmptyState, Field, Flash, inputCls, Notice, PageHeader, Pagination, Panel, selectCls, TableWrap, Tabs, td, th } from "@/components/ui";
 import { effectiveEmbedding, embeddingLabel, sameEmbedding } from "@/lib/ai/embedding-freeze";
 import { searchKnowledge } from "@/lib/ai/retrieval";
 import { describeMatch } from "@/lib/ai/retrieval-core";
@@ -14,6 +16,7 @@ import { purgeSummary } from "@/lib/kb";
 import { MODES, MODE_META } from "@/lib/bot-config";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtInt, fmtRelative } from "@/lib/format";
+import { LIST_PAGE_SIZE, pageInfo, parsePage } from "@/lib/pagination";
 import { getSetting } from "@/lib/settings";
 import { addQa, addUrl, deleteSource, importCms, purge, reprocess, uploadSource } from "./actions";
 
@@ -53,26 +56,42 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
   const bot = await getMainBot();
   const published = await getPublishedVersion(bot);
   const inPublished = new Set(published?.kbSourceIds ?? []);
-  const type = param(sp, "tur") as KbSourceType | "";
+  const typeRaw = param(sp, "tur");
+  const type = (typeRaw in TYPE_META ? typeRaw : "") as KbSourceType | "";
   const query = param(sp, "ara");
   const queryMode = (param(sp, "arama_mod") || "genel") as ChatMode;
 
   // Yerine yenisi geçen ve silinen satırlar listede görünmez; yayında kullanılmaya devam edebilirler.
-  const all = await db
+  const listed = and(eq(kbSources.botId, bot.id), isNull(kbSources.deletedAt), isNull(kbSources.supersededBy));
+  const grouped = await db
+    .select({ type: kbSources.type, status: kbSources.status, n: sql<number>`count(*)::int` })
+    .from(kbSources)
+    .where(listed)
+    .groupBy(kbSources.type, kbSources.status);
+  const counts: Record<string, number> = Object.fromEntries(Object.keys(TYPE_META).map((t) => [t, 0]));
+  let total = 0;
+  let readyCount = 0;
+  let busy = false;
+  for (const g of grouped) {
+    counts[g.type] += g.n;
+    total += g.n;
+    if (g.status === "ready") readyCount += g.n;
+    if (g.status === "pending" || g.status === "processing") busy = true;
+  }
+  const pg = pageInfo(type ? counts[type] : total, parsePage(param(sp, "sayfa")), LIST_PAGE_SIZE);
+  const rows = await db
     .select()
     .from(kbSources)
-    .where(and(eq(kbSources.botId, bot.id), isNull(kbSources.deletedAt), isNull(kbSources.supersededBy)))
-    .orderBy(desc(kbSources.updatedAt));
+    .where(type ? and(listed, eq(kbSources.type, type)) : listed)
+    .orderBy(desc(kbSources.updatedAt), desc(kbSources.id))
+    .limit(pg.limit)
+    .offset(pg.offset);
   const replacedLive = new Set(
-    (await db.select({ id: kbSources.id, by: kbSources.supersededBy }).from(kbSources).where(eq(kbSources.botId, bot.id)))
-      .filter((r) => r.by && inPublished.has(r.id))
+    (await db.select({ id: kbSources.id, by: kbSources.supersededBy }).from(kbSources).where(and(eq(kbSources.botId, bot.id), isNotNull(kbSources.supersededBy))))
+      .filter((r) => inPublished.has(r.id))
       .map((r) => r.by as string),
   );
   const { stillUsed, purgeable } = await purgeSummary(bot.id);
-  const rows = type ? all.filter((s) => s.type === type) : all;
-  const counts = Object.fromEntries(Object.keys(TYPE_META).map((t) => [t, all.filter((s) => s.type === t).length]));
-  const busy = all.some((s) => s.status === "pending" || s.status === "processing");
-  const readyCount = all.filter((s) => s.status === "ready").length;
   const embedding = await getSetting("embedding");
   const providerList = await db.select({ id: providers.id, name: providers.name }).from(providers);
   const liveEmbedding = effectiveEmbedding(published?.embedding, embedding);
@@ -103,7 +122,7 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
       {busy && (
         <div className="mb-5">
           <Notice>
-            İşleniyor: {fmtInt(readyCount)} / {fmtInt(all.length)} kaynak hazır. Yeniden işlenen yayındaki kaynakların eski içeriği, siz yeni sürüm yayınlayana kadar canlıda kullanılır.
+            İşleniyor: {fmtInt(readyCount)} / {fmtInt(total)} kaynak hazır. Yeniden işlenen yayındaki kaynakların eski içeriği, siz yeni sürüm yayınlayana kadar canlıda kullanılır.
           </Notice>
         </div>
       )}
@@ -159,24 +178,22 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
           </form>
         </Panel>
         <Panel id="sss" title="Soru-cevap ekle" description="Sık sorulan sorular aramada öne çıkar.">
-          <form action={addQa} className="grid gap-3">
-            <Field label="Soru" htmlFor="q-question">
-              <input id="q-question" name="question" required defaultValue={param(sp, "soru")} className={inputCls} />
-            </Field>
-            <Field label="Cevap" htmlFor="q-answer">
-              <CountedTextarea id="q-answer" name="answer" rows={3} required max={6000} className={textareaCls} />
-            </Field>
-            <Field label="Geçerli olduğu mod" htmlFor="q-mode">
-              <ModeSelect id="q-mode" defaultValue={param(sp, "mod")} />
-            </Field>
-            <SubmitButton pendingText="Ekleniyor…">Ekle</SubmitButton>
-          </form>
+          <SourceForm
+            key={`${param(sp, "ok")}|${param(sp, "hata")}`}
+            action={addQa}
+            idPrefix="q"
+            initial={{ question: param(sp, "soru"), mode: MODES.some((m) => m === param(sp, "mod")) ? param(sp, "mod") : "all" }}
+            answerMax={6000}
+            submitLabel="Ekle"
+            pendingText="Ekleniyor…"
+            resetOnSuccess
+          />
         </Panel>
       </div>
 
       <Tabs
         items={[
-          { href: "/admin/egitim/bilgi-tabani", label: "Tümü", active: !type, count: all.length },
+          { href: "/admin/egitim/bilgi-tabani", label: "Tümü", active: !type, count: total },
           ...Object.entries(TYPE_META).map(([t, m]) => ({ href: `/admin/egitim/bilgi-tabani?tur=${t}`, label: m.label, active: type === t, count: counts[t] })),
         ]}
       />
@@ -205,7 +222,9 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
                     <div className="flex items-start gap-2.5">
                       <T.icon className="mt-0.5 size-4 shrink-0 text-muted" />
                       <div className="min-w-0">
-                        <div className="font-medium break-words">{s.title}</div>
+                        <Link href={`/admin/egitim/bilgi-tabani/${s.id}`} className="font-medium break-words hover:text-accent hover:underline">
+                          {s.title}
+                        </Link>
                         <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
                           <span>{T.label}</span>
                           {s.url && (
@@ -261,6 +280,7 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
           </EmptyState>
         </div>
       )}
+      <Pagination basePath="/admin/egitim/bilgi-tabani" params={{ tur: type, ara: query, arama_mod: param(sp, "arama_mod") }} page={pg.page} pages={pg.pages} total={pg.total} noun="kaynak" />
 
       {stillUsed.length > 0 && (
         <Panel

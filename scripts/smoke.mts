@@ -146,6 +146,65 @@ const oldPrivacy = await fetch(BASE + "/privacy", { redirect: "manual" });
 check("/privacy → /gizlilik", oldPrivacy.status === 308 && (oldPrivacy.headers.get("location") ?? "").endsWith("/gizlilik"), `${oldPrivacy.status}`);
 check("Landing alt bilgisinde yasal bağlantılar", home.includes("href=\"/gizlilik\"") && home.includes("href=\"/hesap-silme\""), "");
 
+/* ---------- Prompt önizleme ucu: yetki, CSRF, doğrulama, yazmama ---------- */
+// Destek rolü gerçek bir kullanıcı satırı ister (rol veritabanından okunur); geçici satır sonda silinir.
+const [supportUser] = await sql`insert into admin_users (email, name, password_hash, role, active) values (${`smoke-destek-${Date.now()}@example.invalid`}, 'Smoke Destek', '!', 'support', true) returning id, email, name, role`;
+const supportToken = await new SignJWT({ role: "support", email: supportUser.email, name: supportUser.name })
+  .setProtectedHeader({ alg: "HS256" })
+  .setSubject(supportUser.id)
+  .setAudience("admin")
+  .setIssuedAt()
+  .setExpirationTime("10m")
+  .sign(new TextEncoder().encode(process.env.SESSION_SECRET!));
+const PP = BASE + "/api/admin/prompt-preview";
+const pp = (body: unknown, opts: { cookie?: string; origin?: string | null } = {}) =>
+  fetch(PP, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(opts.origin === null ? {} : { origin: opts.origin ?? BASE }), ...(opts.cookie ? { cookie: opts.cookie } : {}) },
+    body: JSON.stringify(body),
+  });
+const ppQ = { mode: "agro", text: "Salı sabahı ilaçlama yapabilir miyim?" };
+check("Prompt önizleme: oturumsuz 401", (await pp(ppQ)).status === 401, "");
+check("Prompt önizleme: destek rolü 403", (await pp(ppQ, { cookie: `hm_admin=${supportToken}` })).status === 403, "");
+check("Prompt önizleme: farklı Origin 403", (await pp(ppQ, { cookie, origin: "https://evil.example" })).status === 403, "");
+check("Prompt önizleme: Origin yok 403", (await pp(ppQ, { cookie, origin: null })).status === 403, "");
+const ppBad = await Promise.all([
+  pp({ ...ppQ, mode: "yok" }, { cookie }),
+  pp({ ...ppQ, text: "  " }, { cookie }),
+  pp({ ...ppQ, text: "a".repeat(4001) }, { cookie }),
+  pp({ ...ppQ, target: "baska" }, { cookie }),
+]);
+check("Prompt önizleme: geçersiz mod / boş / 4001 karakter / hedef 400", ppBad.every((r) => r.status === 400), ppBad.map((r) => r.status).join(","));
+const ppV1 = await pp({ ...ppQ, target: { versionId: crypto.randomUUID() } }, { cookie });
+const ppV2 = await pp({ ...ppQ, target: { versionId: "../etc/passwd" } }, { cookie });
+check("Prompt önizleme: rastgele / geçersiz versionId 404", ppV1.status === 404 && ppV2.status === 404, `${ppV1.status},${ppV2.status}`);
+const [{ n: msgBefore }] = await sql`select count(*)::int as n from messages`;
+const [{ n: convBefore }] = await sql`select count(*)::int as n from conversations`;
+// `<kaynak` bloğu yalnızca eşiği geçen parçalarla kurulur (bu ortamda embedding yok; kelime eşleşmesi terimlerin yarısını ister).
+// Bu yüzden soru, tohum verideki bir SSS'nin (satır 70'teki aramayla aynı) kendi sorusudur; parçası kelime eşiğini geçer.
+// SSS silinmiş/değişmişse (ppQa boş) yalnızca yanıtın biçimi doğrulanır.
+const [ppQa] = await sql`select question from kb_sources
+  where type = 'qa' and question = 'İlaçlama için uygun hava koşulları nelerdir?' and status = 'ready' and chunk_count > 0 and deleted_at is null and superseded_by is null and mode in ('agro', 'all')
+  limit 1`;
+const ppRelevantQ = { mode: "agro", text: ppQa ? (ppQa.question as string) : ppQ.text };
+const ppOk = await pp(ppRelevantQ, { cookie });
+const ppJson = await ppOk.json().catch(() => ({}));
+const [{ n: msgAfter }] = await sql`select count(*)::int as n from messages`;
+const [{ n: convAfter }] = await sql`select count(*)::int as n from conversations`;
+check(
+  "Prompt önizleme: taslak 200, no-store, talimat <kaynak içeriyor",
+  ppOk.status === 200 && (ppOk.headers.get("cache-control") ?? "").includes("no-store") && typeof ppJson.instructions === "string" && (!ppQa || ppJson.instructions.includes("<kaynak")) && Array.isArray(ppJson.hits),
+  `${ppOk.status} · ${ppJson.error ?? `${ppJson.hits?.filter((h: { inContext: boolean }) => h.inContext).length}/${ppJson.hits?.length} parça bağlamda`}`,
+);
+check("Prompt önizleme: messages / conversations satırı oluşmadı", msgBefore === msgAfter && convBefore === convAfter, `messages ${msgBefore}→${msgAfter} · conversations ${convBefore}→${convAfter}`);
+const [pubVer] = await sql`select v.number from bots b join bot_versions v on v.id = b.published_version_id order by b.created_at limit 1`;
+if (pubVer) {
+  const ppPub = await pp({ ...ppQ, target: "published" }, { cookie });
+  const ppPubJson = await ppPub.json().catch(() => ({}));
+  check("Prompt önizleme: yayındaki sürüm", ppPub.status === 200 && ppPubJson.targetLabel === `v${pubVer.number}`, `${ppPub.status} · ${ppPubJson.targetLabel ?? ppPubJson.error}`);
+}
+await sql`delete from admin_users where id = ${supportUser.id}`;
+
 // Test cihazının izlerini temizle (yüklenen görsel dosyası dahil)
 const files = await sql`select storage_key from attachments where app_user_id in (select id from app_users where device_id = ${deviceId})`;
 for (const f of files) await storage.remove(f.storage_key).catch(() => {});

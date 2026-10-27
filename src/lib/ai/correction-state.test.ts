@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { correctionState, pendingCorrectionIds, stateBadge, stateContext, withPendingCorrections, type CorrectionSource } from "./correction-state";
+import { correctionState, matchesStateFilter, parseStateFilter, pendingCorrectionIds, stateBadge, stateContext, withPendingCorrections, type CorrectionSource } from "./correction-state";
 import { publishableSourceIds } from "./kb-lifecycle";
 
 const row = (id: string, o: Partial<CorrectionSource> = {}): CorrectionSource => ({
@@ -114,5 +114,22 @@ describe("withPendingCorrections", () => {
   it("işlenmekte olan düzeltme alınmaz", () => {
     const rows = [row("busy", { status: "processing", chunkCount: 0 })];
     assert.deepEqual(withPendingCorrections(rows, []).added, []);
+  });
+});
+
+describe("durum filtresi", () => {
+  it("geçersiz değer boş filtreye düşer", () => {
+    assert.equal(parseStateFilter("bekliyor"), "bekliyor");
+    assert.equal(parseStateFilter("x"), "");
+  });
+
+  it("her durum doğru filtreye girer", () => {
+    assert.equal(matchesStateFilter("pending", "bekliyor"), true);
+    assert.equal(matchesStateFilter("pending", "yayinda"), false);
+    assert.equal(matchesStateFilter("published_stale", "yayinda"), true);
+    assert.equal(matchesStateFilter("failed", "hata"), true);
+    assert.equal(matchesStateFilter("processing", "isleniyor"), true);
+    assert.equal(matchesStateFilter("missing", "bekliyor"), false);
+    assert.equal(matchesStateFilter("missing", ""), true);
   });
 });

@@ -222,6 +222,55 @@ export function Tabs({ items }: { items: { href: string; label: ReactNode; activ
   );
 }
 
+/**
+ * Sayfa bağlantıları. `params`, sayfa dışındaki geçerli filtreleri (boş olanlar atılır) taşır;
+ * sayfa numarası `sayfa` parametresidir (1. sayfada yazılmaz).
+ */
+export function Pagination({
+  basePath,
+  params = {},
+  page,
+  pages,
+  total,
+  noun = "kayıt",
+}: {
+  basePath: string;
+  params?: Record<string, string>;
+  page: number;
+  pages: number;
+  total: number;
+  noun?: string;
+}) {
+  const href = (p: number) => {
+    const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
+    if (p > 1) qs.set("sayfa", String(p));
+    const s = qs.toString();
+    return s ? `${basePath}?${s}` : basePath;
+  };
+  return (
+    <nav className="mt-4 flex flex-wrap items-center justify-between gap-2 text-sm text-muted" aria-label="Sayfalama">
+      <span className="tabular">
+        {total} {noun}
+        {pages > 1 ? ` · sayfa ${page}/${pages}` : ""}
+      </span>
+      {pages > 1 && (
+        <div className="flex gap-2">
+          {page > 1 && (
+            <Link className={btn("secondary", "sm")} href={href(page - 1)}>
+              Önceki
+            </Link>
+          )}
+          {page < pages && (
+            <Link className={btn("secondary", "sm")} href={href(page + 1)}>
+              Sonraki
+            </Link>
+          )}
+        </div>
+      )}
+    </nav>
+  );
+}
+
 /** Tablo hücreleri için ortak sınıflar. */
 export const th = "px-4 py-2.5 text-left text-[11.5px] font-semibold tracking-wide text-muted uppercase whitespace-nowrap";
 export const td = "px-4 py-3 align-top text-sm";

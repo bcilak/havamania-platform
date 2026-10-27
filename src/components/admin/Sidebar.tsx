@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   BookOpen,
+  ClipboardCheck,
   Cpu,
   ExternalLink,
   FileText,
@@ -40,6 +41,7 @@ const ICONS = {
   persona: SlidersHorizontal,
   corrections: PenLine,
   test: FlaskConical,
+  scenarios: ClipboardCheck,
   publish: Rocket,
   models: Cpu,
   integration: Plug,
@@ -65,7 +67,13 @@ export function Sidebar({
   const [open, setOpen] = useState(false);
   useEffect(() => setOpen(false), [pathname]);
 
-  const isActive = (href: string) => (href === "/admin" ? pathname === "/admin" : pathname === href || pathname.startsWith(href + "/"));
+  const matches = (href: string) => (href === "/admin" ? pathname === "/admin" : pathname === href || pathname.startsWith(href + "/"));
+  // İç içe adreslerde (ör. /test ve /test/senaryolar) yalnızca en özel eşleşme etkin sayılır.
+  const activeHref = groups
+    .flatMap((g) => g.items.map((i) => i.href))
+    .filter(matches)
+    .sort((a, b) => b.length - a.length)[0];
+  const isActive = (href: string) => href === activeHref;
 
   const nav = (
     <nav className="flex flex-col gap-5 px-3 py-4" aria-label="Panel menüsü">

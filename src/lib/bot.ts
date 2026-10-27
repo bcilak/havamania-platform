@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { botVersions, bots, providers } from "@/db/schema";
 import { withPendingCorrections } from "./ai/correction-state";
@@ -27,11 +27,50 @@ export async function getBotByPublicKey(publicKey: string): Promise<BotRow | nul
 export async function getPublishedVersion(bot: BotRow): Promise<BotVersionRow | null> {
   if (!bot.publishedVersionId) return null;
   const [v] = await db.select().from(botVersions).where(eq(botVersions.id, bot.publishedVersionId));
-  return v ? { ...v, config: normalizeBotConfig(v.config) } : null;
+  return v ? { ...v, config: normalizeBotConfig(v.config, { frozen: true }) } : null;
 }
 
 export async function listVersions(botId: string): Promise<BotVersionRow[]> {
   return db.select().from(botVersions).where(eq(botVersions.botId, botId)).orderBy(desc(botVersions.number));
+}
+
+/** Tek sürüm (bu bota ait değilse null); config normalize edilir. */
+export async function getVersion(botId: string, versionId: string): Promise<BotVersionRow | null> {
+  const [v] = await db.select().from(botVersions).where(and(eq(botVersions.id, versionId), eq(botVersions.botId, botId)));
+  return v ? { ...v, config: normalizeBotConfig(v.config, { frozen: true }) } : null;
+}
+
+export type VersionSummary = Pick<BotVersionRow, "id" | "number" | "note" | "publishedBy" | "publishedAt"> & { sourceCount: number };
+
+/** Sürüm listesi için hafif satırlar (config ve kaynak kimlikleri çekilmez); en yeni önce. */
+export async function listVersionSummaries(botId: string, opts: { limit: number; offset?: number }): Promise<VersionSummary[]> {
+  return db
+    .select({
+      id: botVersions.id,
+      number: botVersions.number,
+      note: botVersions.note,
+      publishedBy: botVersions.publishedBy,
+      publishedAt: botVersions.publishedAt,
+      sourceCount: sql<number>`jsonb_array_length(${botVersions.kbSourceIds})`.mapWith(Number),
+    })
+    .from(botVersions)
+    .where(eq(botVersions.botId, botId))
+    .orderBy(desc(botVersions.number))
+    .limit(opts.limit)
+    .offset(opts.offset ?? 0);
+}
+
+export async function countVersions(botId: string): Promise<number> {
+  const [row] = await db.select({ n: count() }).from(botVersions).where(eq(botVersions.botId, botId));
+  return row?.n ?? 0;
+}
+
+/** Sürümün geçmiş listesinde kaçıncı sayfada olduğu (en yeni önce); sürüm yoksa 1. */
+export async function versionPageOf(botId: string, versionId: string, pageSize: number): Promise<number> {
+  const [v] = await db.select({ number: botVersions.number }).from(botVersions).where(and(eq(botVersions.id, versionId), eq(botVersions.botId, botId)));
+  if (!v) return 1;
+  const [row] = await db.select({ n: count() }).from(botVersions).where(and(eq(botVersions.botId, botId), gt(botVersions.number, v.number)));
+  return Math.floor((row?.n ?? 0) / pageSize) + 1;
 }
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -199,7 +238,7 @@ export async function configModelProblems(config: BotConfig, opts: { includeUnse
 export async function checkRollback(bot: BotRow, versionId: string): Promise<{ version: BotVersionRow; problems: string[] } | null> {
   const [v] = await db.select().from(botVersions).where(and(eq(botVersions.id, versionId), eq(botVersions.botId, bot.id)));
   if (!v) return null;
-  const found = await configModelProblems(normalizeBotConfig(v.config), { includeUnset: false });
+  const found = await configModelProblems(normalizeBotConfig(v.config, { frozen: true }), { includeUnset: false });
   return { version: v, problems: found.map((p) => `v${v.number}'teki ${p.label} modu için ${MODEL_PROBLEM_TEXT[p.reason]}`) };
 }
 

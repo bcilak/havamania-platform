@@ -1,6 +1,7 @@
 /*
  * Yerel geliştirme için sahte servisler (port 3199):
  *   POST /v1/chat/completions   OpenAI uyumlu model: akış, araç çağırma, kullanım bilgisi
+ *   GET  /__last-chat           Son model isteğinin max_tokens / max_completion_tokens değerleri (testler için)
  *   POST /v1/embeddings         OpenAI biçiminde, kelime-hash tabanlı deterministik vektör
  *   GET  /v1/weather/current    Havamania veri API'si taklitleri
  *   GET  /v1/weather/forecast
@@ -17,6 +18,7 @@ import http from "node:http";
 
 const PORT = Number(process.env.MOCK_PORT || 3199);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let lastChat = null;
 
 const DATA = {
   "/v1/weather/current": (q) => ({ location: q.get("q") || "Konum", temp: 24, feels_like: 25, humidity: 58, wind_kmh: 14, uv: 6, visibility_km: 40, pressure_hpa: 1012 }),
@@ -79,6 +81,10 @@ http
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end("<html><head><title>Sahte bilgi sayfası</title></head><body><main><p>Zeytin ağaçlarında zeytinsineği mücadelesi eylül ayında başlar.</p></main></body></html>");
     }
+    if (req.method === "GET" && url.pathname === "/__last-chat") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify(lastChat));
+    }
     if (req.method === "GET" && DATA[url.pathname]) {
       // Hata enjeksiyonu: q (uçuşta origin) = __500 | __timeout | __badjson
       const fault = url.searchParams.get("q") ?? url.searchParams.get("origin");
@@ -122,6 +128,7 @@ http
     let raw = "";
     for await (const c of req) raw += c;
     const body = JSON.parse(raw || "{}");
+    lastChat = { model: body.model ?? null, max_tokens: body.max_tokens ?? null, max_completion_tokens: body.max_completion_tokens ?? null, at: Date.now() };
     const msgs = body.messages || [];
     const last = msgs[msgs.length - 1] || {};
     const lastUser = [...msgs].reverse().find((m) => m.role === "user");

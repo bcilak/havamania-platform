@@ -6,6 +6,9 @@ import { after } from "next/server";
 import { db } from "@/db";
 import { cmsDocuments, kbSources, type ChatMode } from "@/db/schema";
 import { processSource } from "@/lib/ai/ingest";
+import { isQaLike, planEdit } from "@/lib/ai/kb-edit-core";
+import { findSimilarQa } from "@/lib/ai/retrieval";
+import type { SimilarState } from "@/lib/ai/similar-core";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
 import { getMainBot } from "@/lib/bot";
@@ -13,11 +16,12 @@ import { beginReprocess, purgeSources, removeSource } from "@/lib/kb";
 import { MODES } from "@/lib/bot-config";
 import { landingToText } from "@/lib/cms/flatten";
 import { defaultLandingContent } from "@/lib/cms/schema";
-import { done, fail, str, strStrict } from "@/lib/form";
+import { bool, done, fail, str, strStrict } from "@/lib/form";
 import { assertPublicUrl, SafeFetchError } from "@/lib/net/safe-fetch";
 import { extFor, newStorageKey, storage } from "@/lib/storage";
 
 const BACK = "/admin/egitim/bilgi-tabani";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FILE_TYPES = [
   "application/pdf",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -80,15 +84,24 @@ export async function addUrl(fd: FormData) {
   done(BACK, "Sayfa eklendi, içeriği alınıyor.");
 }
 
-export async function addQa(fd: FormData) {
+/**
+ * Soru-cevap ekler. Aynı kapsamda aynı ya da çok benzer soru varsa kayıt oluşturmadan benzerleri
+ * döndürür (form uyarıyı gösterir); `force` işaretliyse uyarı atlanır.
+ */
+export async function addQa(fd: FormData): Promise<SimilarState> {
   const admin = await requireAdmin("training");
   const bot = await getMainBot();
   const question = str(fd, "question", 1000);
   const answer = strStrict(fd, "answer", 6000, "Cevap", BACK);
   if (!question || !answer) fail(BACK + "#sss", "Soru ve cevap boş olamaz.");
+  const mode = modeOf(fd);
+  if (!bool(fd, "force")) {
+    const similar = await findSimilarQa({ botId: bot.id, question, answer, mode });
+    if (similar.length) return { similar };
+  }
   const [src] = await db
     .insert(kbSources)
-    .values({ botId: bot.id, type: "qa", mode: modeOf(fd), title: question.slice(0, 160), question, answer, priority: 5, createdBy: admin.email })
+    .values({ botId: bot.id, type: "qa", mode, title: question.slice(0, 160), question, answer, priority: 5, createdBy: admin.email })
     .returning();
   after(() => processSource(src.id));
   await audit(admin, "kb.create", src.id, { type: "qa", question });
@@ -160,4 +173,50 @@ export async function purge() {
   await audit(admin, "kb.purge", null, { count: n });
   revalidatePath(BACK);
   done(BACK, n ? `${n} kullanılmayan kaynak kalıcı silindi.` : "Silinecek kaynak yok. Yayındaki ve son 10 sürümdeki kaynaklar korunur.");
+}
+
+/**
+ * Kaynağı düzenler: başlık ve mod her türde, soru/cevap SSS ve düzeltmede. Kaynak bir sürümde
+ * geçiyorsa (yayında ya da geri alınabilir sürümlerde) yerinde değişmez; yeni bir satır açılır ve
+ * yayındaki sürüm yeni sürüm yayınlanana kadar eski halini kullanır (bkz. beginReprocess).
+ * Korunmayan kaynak yerinde güncellenip yeniden işlenir. Düzeltmede `corrections` kaydı da güncellenir.
+ * Soru ya da mod değişince aynı kapsamda benzer kayıt aranır; varsa kayıt oluşmadan uyarı döner.
+ */
+export async function updateSource(fd: FormData): Promise<SimilarState> {
+  const admin = await requireAdmin("training");
+  const bot = await getMainBot();
+  const id = str(fd, "id");
+  if (!UUID.test(id)) fail(BACK, "Kaynak bulunamadı.");
+  const back = `${BACK}/${id}`;
+  const [src] = await db.select().from(kbSources).where(and(eq(kbSources.id, id), eq(kbSources.botId, bot.id)));
+  if (!src) fail(BACK, "Kaynak bulunamadı.");
+  if (src!.deletedAt) fail(back, "Silinmiş kaynak düzenlenemez.");
+  if (src!.supersededBy) fail(back, "Bu kaydın yerine yenisi geçti; güncel kaydı düzenleyin.");
+
+  const qa = isQaLike(src!.type);
+  const mode = modeOf(fd);
+  const question = qa ? str(fd, "question", 1000) : undefined;
+  const answer = qa ? strStrict(fd, "answer", src!.type === "correction" ? 4000 : 6000, "Cevap", back) : undefined;
+  if (qa && (!question || !answer)) fail(back, "Soru ve cevap boş olamaz.");
+  const plan = planEdit(src!, { mode, title: qa ? undefined : str(fd, "title", 200), question, answer });
+  if (!plan.changed.length) done(back, "Değişiklik yok.");
+
+  const scopeChanged = plan.changed.includes("question") || plan.changed.includes("mode");
+  if (qa && scopeChanged && !bool(fd, "force")) {
+    const similar = await findSimilarQa({ botId: bot.id, question: question!, answer, mode, excludeSourceId: id });
+    if (similar.length) return { similar };
+  }
+
+  const nextId = await beginReprocess(bot.id, id, plan.patch, src!.type === "correction" ? { syncCorrection: { actorEmail: admin.email } } : undefined);
+  if (!nextId) fail(back, "Kaynak bulunamadı.");
+  after(() => processSource(nextId!));
+  await audit(admin, "kb.update", nextId!, { from: id, type: src!.type, changed: plan.changed });
+  revalidatePath(BACK);
+  revalidatePath("/admin/egitim/duzeltmeler");
+  done(
+    `${BACK}/${nextId}`,
+    nextId === id
+      ? "Kaydedildi, yeniden işleniyor. Bu kaynak henüz hiçbir sürümde yok; yayınladığınızda yeni hâliyle girer."
+      : "Kaydedildi, yeni bir kayıt olarak işleniyor. Yayındaki sürüm, yeni sürüm yayınlanana kadar önceki hâlini kullanmaya devam eder.",
+  );
 }

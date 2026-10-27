@@ -22,6 +22,10 @@ export const LIMITS = {
   chatPerMinPerUser: envInt("RATE_LIMIT_CHAT_PER_USER_PER_MIN", 8),
   uploadPerMin: envInt("RATE_LIMIT_UPLOAD_PER_MIN", 10),
   feedbackPerMin: envInt("RATE_LIMIT_FEEDBACK_PER_MIN", 30),
+  /** Prompt önizleme embedding çağrısı yapar (maliyetli); IP ve yönetici başına ayrı sayılır. */
+  promptPreviewPerMin: envInt("RATE_LIMIT_PROMPT_PREVIEW_PER_MIN", 20),
+  /** Bilgi tabanı kaynağında deneme araması (embedding çağrısı yapar); yönetici başına. */
+  kbSearchPerMin: envInt("RATE_LIMIT_KB_SEARCH_PER_MIN", 20),
 };
 
 /** true: istek geçebilir. */

@@ -7,23 +7,31 @@ import { corrections, type ChatMode } from "@/db/schema";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
 import { getMainBot } from "@/lib/bot";
+import { findSimilarQa } from "@/lib/ai/retrieval";
+import type { SimilarState } from "@/lib/ai/similar-core";
 import { MODES } from "@/lib/bot-config";
 import { createCorrection } from "@/lib/corrections";
 import { removeSource } from "@/lib/kb";
-import { done, fail, str, strStrict } from "@/lib/form";
+import { bool, done, fail, str, strStrict } from "@/lib/form";
 
 const BACK = "/admin/egitim/duzeltmeler";
 
-export async function addManualCorrection(fd: FormData) {
+/** Benzer kayıt varsa (aynı kapsamda aynı/çok benzer soru) kayıt oluşturmadan benzerleri döndürür; `force` ile atlanır. */
+export async function addManualCorrection(fd: FormData): Promise<SimilarState> {
   const admin = await requireAdmin("training");
   const bot = await getMainBot();
   const question = str(fd, "question", 1000);
   const answer = strStrict(fd, "answer", 4000, "Doğru cevap", BACK);
   if (!question || !answer) fail(BACK, "Soru ve doğru cevap boş olamaz.");
   const m = str(fd, "mode");
+  const mode = MODES.includes(m as ChatMode) ? (m as ChatMode) : "all";
+  if (!bool(fd, "force")) {
+    const similar = await findSimilarQa({ botId: bot.id, question, answer, mode });
+    if (similar.length) return { similar };
+  }
   await createCorrection({
     botId: bot.id,
-    mode: MODES.includes(m as ChatMode) ? (m as ChatMode) : "all",
+    mode,
     question,
     correctAnswer: answer,
     actorEmail: admin.email,

@@ -1,15 +1,16 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { bots } from "@/db/schema";
+import { botVersions, bots } from "@/db/schema";
 import { MODEL_PROBLEM_TEXT } from "@/lib/ai/model-meta";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
 import { checkRollback, configModelProblems, getMainBot, PublishError, publishCorrections, publishDraft, rollbackTo } from "@/lib/bot";
 import { encrypt, randomToken } from "@/lib/crypto";
-import { bool, done, fail, str } from "@/lib/form";
+import { bool, done, fail, str, strStrict } from "@/lib/form";
+import { VERSION_NOTE_MAX } from "@/lib/form-limits";
 
 const BACK = "/admin/yayin";
 
@@ -68,6 +69,25 @@ export async function rollback(fd: FormData) {
   await audit(admin, "bot.rollback", `v${v!.number}`, { force: bool(fd, "force"), problems: check!.problems });
   revalidatePath("/admin", "layout");
   done(BACK, `v${v!.number} yeniden yayında. Taslağınız değişmedi.`);
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Yalnızca sürüm notunu değiştirir (config ve kaynaklar dondurulmuştur); eski ve yeni not audit kaydına yazılır. */
+export async function saveVersionNote(fd: FormData) {
+  const admin = await requireAdmin("publish");
+  const bot = await getMainBot();
+  const versionId = str(fd, "versionId");
+  if (!UUID.test(versionId)) fail(BACK, "Sürüm bulunamadı.");
+  const back = `${BACK}/${versionId}`;
+  const note = strStrict(fd, "note", VERSION_NOTE_MAX, "Sürüm notu", back) || null;
+  const [current] = await db.select({ number: botVersions.number, note: botVersions.note }).from(botVersions).where(and(eq(botVersions.id, versionId), eq(botVersions.botId, bot.id)));
+  if (!current) fail(BACK, "Sürüm bulunamadı.");
+  if ((current!.note ?? null) === note) done(back, "Not zaten bu şekilde.");
+  await db.update(botVersions).set({ note }).where(and(eq(botVersions.id, versionId), eq(botVersions.botId, bot.id)));
+  await audit(admin, "bot.version_note", `v${current!.number}`, { versionId, from: current!.note, to: note });
+  revalidatePath("/admin/yayin");
+  done(back, `v${current!.number} notu kaydedildi.`);
 }
 
 export async function saveAccess(fd: FormData) {

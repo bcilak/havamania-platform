@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { appUsers, type ChatMode } from "@/db/schema";
 import { ChatError, handleChat } from "@/lib/ai/chat";
 import { parseLocation } from "@/lib/ai/location";
+import { parseTarget } from "@/lib/ai/turn-core";
 import { getAdmin } from "@/lib/auth";
 import { getMainBot } from "@/lib/bot";
 import { MODES } from "@/lib/bot-config";
@@ -30,6 +31,10 @@ export async function POST(request: Request) {
     if (playground === true) {
       const admin = await getAdmin();
       if (!admin || !can(admin.role, "training")) return err("Oturum süresi doldu. Sayfayı yenileyin.", 401);
+      // Hedef (taslak / yayındaki / belirli sürüm) yalnızca test alanında geçerlidir; sürümün bu bota
+      // ait olduğu handleChat içinde doğrulanır (değilse 404). Widget isteklerinde alan yok sayılır.
+      const target = parseTarget(body.target);
+      if (!target) return err("Geçersiz hedef.", 400);
       return await handleChat({
         bot: await getMainBot(),
         appUser: null,
@@ -40,6 +45,7 @@ export async function POST(request: Request) {
         attachmentIds: ids,
         location: loc,
         useDraft: true,
+        target,
         abortSignal: request.signal,
       });
     }

@@ -1,15 +1,28 @@
 import Link from "next/link";
-import { ChatApp, type ModeInfo } from "@/components/chat/ChatApp";
+import { PlaygroundShell, type VersionOption } from "@/components/admin/PlaygroundShell";
+import type { ModeInfo } from "@/components/chat/ChatApp";
 import { Notice, PageHeader } from "@/components/ui";
 import { requireAdmin } from "@/lib/auth";
-import { getMainBot } from "@/lib/bot";
+import { getMainBot, listVersions } from "@/lib/bot";
 import { MODE_DISCLAIMERS, MODES, TOOLS } from "@/lib/bot-config";
 
 export const metadata = { title: "Test alanı" };
 
-export default async function PlaygroundPage() {
+/** Adres: ?hedef=yayin (yayındaki sürüm) ya da ?surum=<sürüm kimliği>. Listede olmayan değer yok sayılır, taslak açılır. */
+export default async function PlaygroundPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   await requireAdmin("training");
+  const sp = await searchParams;
   const bot = await getMainBot();
+  const versions: VersionOption[] = (await listVersions(bot.id)).map((v) => ({
+    id: v.id,
+    number: v.number,
+    note: v.note,
+    published: v.id === bot.publishedVersionId,
+  }));
+  const surum = typeof sp.surum === "string" ? sp.surum : "";
+  const initialSelection =
+    sp.hedef === "yayin" && versions.some((v) => v.published) ? "published" : versions.some((v) => v.id === surum) ? `v:${surum}` : "draft";
+
   const cfg = bot.draftConfig;
   const modes: ModeInfo[] = MODES.filter((m) => cfg.modes[m].enabled).map((m) => ({
     id: m,
@@ -24,7 +37,7 @@ export default async function PlaygroundPage() {
     <>
       <PageHeader
         title="Test alanı"
-        description="Taslaktaki ayarlarla ve hazır olan tüm bilgi tabanı kaynaklarıyla sohbet edin. Her cevabın altında kullanılan kaynakları, araç çağrılarını ve maliyeti görürsünüz."
+        description="Taslaktaki, yayındaki ya da seçtiğiniz bir sürümdeki ayarlarla sohbet edin. Her cevabın altında kullanılan kaynakları, araç çağrılarını ve maliyeti görürsünüz. Test konuşmaları istatistiklere girmez."
       />
       {missing.length > 0 && (
         <div className="mb-4">
@@ -41,16 +54,15 @@ export default async function PlaygroundPage() {
           </Notice>
         </div>
       )}
-      <div className="h-[min(760px,calc(100dvh-220px))] min-h-[480px] overflow-hidden rounded-2xl border border-line">
-        <ChatApp
-          variant="playground"
-          modes={modes}
-          initialMode={modes[0]?.id ?? "genel"}
-          photosEnabled={cfg.photosEnabled}
-          maxPhotoMb={cfg.maxPhotoMb}
-          toolLabels={Object.fromEntries(Object.entries(TOOLS).map(([k, v]) => [k, v.label]))}
-        />
-      </div>
+      <PlaygroundShell
+        versions={versions}
+        initialSelection={initialSelection}
+        modes={modes}
+        initialMode={modes[0]?.id ?? "genel"}
+        photosEnabled={cfg.photosEnabled}
+        maxPhotoMb={cfg.maxPhotoMb}
+        toolLabels={Object.fromEntries(Object.entries(TOOLS).map(([k, v]) => [k, v.label]))}
+      />
     </>
   );
 }

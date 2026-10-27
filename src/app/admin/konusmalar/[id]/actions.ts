@@ -1,14 +1,19 @@
 "use server";
 
-import { eq } from "drizzle-orm";
+import { and, desc, eq, lt, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { attachments, conversations, type ChatMode } from "@/db/schema";
+import { attachments, conversations, evalCases, messages, type ChatMode } from "@/db/schema";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
+import { findSimilarQa } from "@/lib/ai/retrieval";
+import type { SimilarState } from "@/lib/ai/similar-core";
 import { createCorrection } from "@/lib/corrections";
-import { done, fail, str, strStrict } from "@/lib/form";
+import { emptyExpect, EVAL_LIMITS } from "@/lib/eval";
+import { bool, done, fail, str, strStrict } from "@/lib/form";
 import { storage } from "@/lib/storage";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function toggleFlag(fd: FormData) {
   const admin = await requireAdmin("conversations");
@@ -31,7 +36,8 @@ export async function deleteConversation(fd: FormData) {
   done("/admin/konusmalar", "Konuşma ve fotoğrafları kalıcı olarak silindi.");
 }
 
-export async function addCorrection(fd: FormData) {
+/** Benzer kayıt varsa kayıt oluşturmadan benzerleri döndürür (form uyarıyı gösterir); `force` ile atlanır. */
+export async function addCorrection(fd: FormData): Promise<SimilarState> {
   const admin = await requireAdmin("training");
   const conversationId = str(fd, "conversationId");
   const back = `/admin/konusmalar/${conversationId}`;
@@ -41,6 +47,10 @@ export async function addCorrection(fd: FormData) {
   const [c] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!c) fail("/admin/konusmalar", "Konuşma bulunamadı.");
   const scope = str(fd, "scope") === "all" ? "all" : (c!.mode as ChatMode);
+  if (!bool(fd, "force")) {
+    const similar = await findSimilarQa({ botId: c!.botId, question, answer: correct, mode: scope });
+    if (similar.length) return { similar };
+  }
   await createCorrection({
     botId: c!.botId,
     mode: scope,
@@ -79,4 +89,48 @@ export async function deletePhoto(fd: FormData) {
   await audit(admin, "photo.delete", id);
   revalidatePath(back.split("?")[0]);
   done(back, "Fotoğraf kalıcı olarak silindi.");
+}
+
+/**
+ * Bir cevabın sorusunu test senaryosu olarak kaydeder. Soru kullanıcı konuşmasından geldiği için
+ * kişisel veri içerebilir: yönetici metni kontrol ettiğini onaylamadan kayıt oluşmaz. Senaryo kaynak
+ * mesajdan bağımsızdır (mesaj silinince bağ boşalır, soru metni kalır). Ölçütler senaryo sayfasında girilir.
+ */
+export async function addCaseFromMessage(fd: FormData) {
+  const admin = await requireAdmin("training");
+  const conversationId = str(fd, "conversationId");
+  const messageId = str(fd, "messageId");
+  if (!UUID_RE.test(conversationId)) fail("/admin/konusmalar", "Konuşma bulunamadı.");
+  if (!UUID_RE.test(messageId)) fail(`/admin/konusmalar/${conversationId}`, "Mesaj bulunamadı.");
+  const back = `/admin/konusmalar/${conversationId}#m-${messageId}`;
+  const question = strStrict(fd, "question", EVAL_LIMITS.questionMax, "Soru", back);
+  if (!question) fail(back, "Soru boş olamaz.");
+  if (!bool(fd, "piiOk")) fail(back, "Soruda kişisel veri olmadığını onaylamanız gerekir.");
+  const [c] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
+  if (!c) fail("/admin/konusmalar", "Konuşma bulunamadı.");
+  const [answer] = await db.select().from(messages).where(and(eq(messages.id, messageId), eq(messages.conversationId, conversationId)));
+  if (!answer) fail(back, "Mesaj bulunamadı.");
+  // Sorunun geldiği kullanıcı mesajı: bu cevaptan önceki son kullanıcı mesajı.
+  const [userMsg] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(and(eq(messages.conversationId, conversationId), eq(messages.role, "user"), lt(messages.createdAt, answer!.createdAt)))
+    .orderBy(desc(messages.createdAt))
+    .limit(1);
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(evalCases).where(eq(evalCases.botId, c!.botId));
+  if (n >= EVAL_LIMITS.maxCases) fail(back, `En fazla ${EVAL_LIMITS.maxCases} senaryo kaydedilebilir. Eskilerini silin.`);
+  const [created] = await db
+    .insert(evalCases)
+    .values({
+      botId: c!.botId,
+      mode: c!.mode,
+      question,
+      expect: emptyExpect(),
+      note: "Konuşmadan eklendi.",
+      sourceMessageId: userMsg?.id ?? null,
+      createdBy: admin.email,
+    })
+    .returning({ id: evalCases.id });
+  await audit(admin, "eval.case_create", created.id, { conversationId, questionLength: question.length });
+  done(`/admin/egitim/test/senaryolar?duzenle=${created.id}`, "Senaryo eklendi. Beklenen ölçütleri belirleyin.");
 }

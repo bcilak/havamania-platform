@@ -87,3 +87,31 @@ export function withPendingCorrections(rows: CorrectionSource[], publishedIds: r
   const kept = publishedIds.filter((id) => !drop.has(id));
   return { kbSourceIds: [...kept, ...added], added, replaced: publishedIds.filter((id) => drop.has(id)) };
 }
+
+/** Düzeltme listesindeki durum filtresi (url parametresi). */
+export const STATE_FILTERS = [
+  { id: "isleniyor", label: "İşleniyor" },
+  { id: "hata", label: "Hata" },
+  { id: "bekliyor", label: "Yayın bekliyor" },
+  { id: "yayinda", label: "Yayında" },
+] as const;
+
+export type StateFilter = (typeof STATE_FILTERS)[number]["id"];
+
+export const parseStateFilter = (raw: string): StateFilter | "" => (STATE_FILTERS.some((f) => f.id === raw) ? (raw as StateFilter) : "");
+
+/** Durumun hangi filtreye girdiği; filtrede olmayan durumlar (silinmiş, yayına girmeyecek) yalnızca "Tümü"nde görünür. */
+export function matchesStateFilter(state: CorrectionState, filter: StateFilter | ""): boolean {
+  switch (filter) {
+    case "":
+      return true;
+    case "isleniyor":
+      return state === "processing";
+    case "hata":
+      return state === "failed";
+    case "bekliyor":
+      return state === "pending";
+    case "yayinda":
+      return state === "published" || state === "published_stale";
+  }
+}

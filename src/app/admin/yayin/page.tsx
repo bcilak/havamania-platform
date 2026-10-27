@@ -1,49 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import Link from "next/link";
-import { eq } from "drizzle-orm";
-import { ExternalLink, Rocket } from "lucide-react";
+import { desc, eq } from "drizzle-orm";
+import { FlaskConical, Rocket } from "lucide-react";
 import { db } from "@/db";
-import { kbSources, providers } from "@/db/schema";
+import { evalRuns, kbSources, providers } from "@/db/schema";
 import { ConfirmButton, CopyButton, SubmitButton } from "@/components/client";
 import { Badge, btn, checkboxCls, EmptyState, Field, Flash, inputCls, KeyValue, Notice, PageHeader, Panel, TableWrap, td, th } from "@/components/ui";
 import { effectiveEmbedding, embeddingLabel, pendingIndexOnModelSwitch, sameEmbedding } from "@/lib/ai/embedding-freeze";
 import { diffSources, pendingIndexCount, publishableSourceIds } from "@/lib/ai/kb-lifecycle";
 import { requireAdmin } from "@/lib/auth";
 import { MODEL_PROBLEM_TEXT } from "@/lib/ai/model-meta";
-import { configModelProblems, getMainBot, getPublishedVersion, listVersions } from "@/lib/bot";
-import { MODES, TONES, type BotConfig } from "@/lib/bot-config";
+import { configModelProblems, countVersions, getMainBot, getPublishedVersion, listVersionSummaries, versionPageOf } from "@/lib/bot";
+import { diffConfigs, summarizeChanges } from "@/lib/config-diff";
 import { loadCorrectionStatus } from "@/lib/corrections";
 import { decryptOrNull, maskSecret } from "@/lib/crypto";
 import { param, type SearchParams } from "@/lib/form";
-import { fmtDateTime } from "@/lib/format";
+import { effectiveRunStatus, targetLabel } from "@/lib/eval";
+import { fmtDateTime, fmtRelative } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getSetting } from "@/lib/settings";
 import { publish, publishPendingCorrections, regenerateSecret, rollback, saveAccess } from "./actions";
 
 export const metadata = { title: "Sürümler ve gömme" };
 
-function diff(a: BotConfig | null, b: BotConfig): string[] {
-  if (!a) return ["İlk yayın"];
-  const out: string[] = [];
-  for (const m of MODES) {
-    const x = a.modes[m];
-    const y = b.modes[m];
-    const label = y.label;
-    if (x.enabled !== y.enabled) out.push(`${label}: ${y.enabled ? "açıldı" : "kapatıldı"}`);
-    if (x.instructions !== y.instructions) out.push(`${label}: talimat değişti`);
-    if (x.tone !== y.tone) out.push(`${label}: üslup ${TONES[x.tone]?.label} → ${TONES[y.tone]?.label}`);
-    if (x.model !== y.model || x.providerId !== y.providerId) out.push(`${label}: model ${x.model ?? "yok"} → ${y.model ?? "yok"}`);
-    if (x.temperature !== y.temperature) out.push(`${label}: temperature ${x.temperature} → ${y.temperature}`);
-    if ([...x.tools].sort().join() !== [...y.tools].sort().join()) out.push(`${label}: araçlar değişti`);
-    if (x.greeting !== y.greeting || x.suggestions.join() !== y.suggestions.join() || x.label !== y.label) out.push(`${label}: karşılama/öneriler değişti`);
-  }
-  if (a.guardrails !== b.guardrails) out.push("Ortak kurallar değişti");
-  for (const k of ["historyWindow", "maxMessagesPerDay", "photosEnabled", "maxPhotoMb", "retrievalTopK", "fallbackMessage"] as const) {
-    if (a[k] !== b[k]) out.push(`${k}: ${a[k]} → ${b[k]}`);
-  }
-  return out;
-}
+const VERSION_PAGE = 20;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function readSdk(file: string, botKey: string, appUrl: string): Promise<string> {
   try {
@@ -59,7 +41,12 @@ export default async function PublishPage({ searchParams }: { searchParams: Sear
   const sp = await searchParams;
   const bot = await getMainBot();
   const published = await getPublishedVersion(bot);
-  const versions = await listVersions(bot.id);
+  // Sürüm sayısı sınırsız büyüyebilir: geçmiş sayfalanır (config ve kaynak listesi çekilmez).
+  const forceId = param(sp, "zorla");
+  // "Yine de geri al" onayı istenen sürümün bulunduğu sayfa açılır.
+  const page = param(sp, "sayfa") || !UUID.test(forceId) ? Math.max(1, Number(param(sp, "sayfa")) || 1) : await versionPageOf(bot.id, forceId, VERSION_PAGE);
+  const [totalVersions, versions] = await Promise.all([countVersions(bot.id), listVersionSummaries(bot.id, { limit: VERSION_PAGE, offset: (page - 1) * VERSION_PAGE })]);
+  const pages = Math.max(1, Math.ceil(totalVersions / VERSION_PAGE));
   const sources = await db
     .select({ id: kbSources.id, title: kbSources.title, deletedAt: kbSources.deletedAt, supersededBy: kbSources.supersededBy, chunkCount: kbSources.chunkCount, status: kbSources.status })
     .from(kbSources)
@@ -70,7 +57,7 @@ export default async function PublishPage({ searchParams }: { searchParams: Sear
   const added = kbDiff.added;
   const replaced = kbDiff.replaced;
   const removed = kbDiff.removed.length;
-  const changes = diff(published?.config ?? null, bot.draftConfig);
+  const changes = summarizeChanges(diffConfigs(published?.config ?? null, bot.draftConfig));
   // Yayın, o andaki embedding ayarını dondurur. Eski sürüm (kayıt yok) güncel ayarla çalıştığı için fark göstermez.
   const embeddingNow = await getSetting("embedding");
   // Model değişmişken yeniden indeksleme bitmeden yayınlanırsa bekleyen kaynaklar canlıda yalnızca tam metinle bulunur; onay gerekir.
@@ -82,6 +69,8 @@ export default async function PublishPage({ searchParams }: { searchParams: Sear
       changes.push(`Embedding modeli: ${embeddingLabel(was, names)} → ${embeddingLabel(embeddingNow, names)} (canlı yayınlayınca yeni modele geçer)`);
     }
   }
+  const [lastEval] = await db.select().from(evalRuns).where(eq(evalRuns.botId, bot.id)).orderBy(desc(evalRuns.startedAt)).limit(1);
+  const lastEvalStatus = lastEval ? effectiveRunStatus(lastEval) : null;
   const modelProblems = await configModelProblems(bot.draftConfig, { includeUnset: true });
   const corrections = await loadCorrectionStatus(bot);
   const appUrl = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
@@ -121,6 +110,23 @@ const token = await new SignJWT({})
         description="Taslakta yaptığınız değişiklikler yayınlanana kadar kullanıcılara ulaşmaz. Gömme kodu sürüm numarası değil bot anahtarı içerdiği için her yayında uygulamayı güncellemeniz gerekmez."
       />
       <Flash sp={sp} />
+      <p className="mb-5 text-sm text-muted">
+        {lastEval?.summary && lastEvalStatus?.status === "done" ? (
+          <>
+            Son senaryo koşusu: {lastEval.summary.passed}/{lastEval.summary.passed + lastEval.summary.failed} geçti ({targetLabel(lastEval.target, lastEval.versionNumber).toLowerCase()}, {fmtRelative(lastEval.startedAt)}).{" "}
+            <Link href={`/admin/egitim/test/kosular/${lastEval.id}`} className="text-accent hover:underline">
+              Sonuçlar
+            </Link>
+            {" · "}
+          </>
+        ) : (
+          "Henüz tamamlanmış bir senaryo koşusu yok. "
+        )}
+        <Link href="/admin/egitim/test/senaryolar" className="text-accent hover:underline">
+          Yayından önce koş
+        </Link>
+        . Koşu yayın için zorunlu değildir.
+      </p>
 
       <div className="mb-6 grid gap-4 lg:grid-cols-2">
         <Panel title="Yayındaki sürüm">
@@ -194,6 +200,13 @@ const token = await new SignJWT({})
               </Notice>
             </div>
           )}
+          {published && (
+            <p className="mb-4 text-sm">
+              <Link href={`/admin/yayin/${published.id}?karsilastir=taslak`} className="font-medium text-accent underline">
+                Taslağı v{published.number} ile ayrıntılı karşılaştır
+              </Link>
+            </p>
+          )}
           <form action={publish} className="grid gap-3">
             <div className="flex flex-wrap items-end gap-2">
               <Field label="Sürüm notu (isteğe bağlı)" htmlFor="note" className="min-w-0 flex-1">
@@ -247,12 +260,15 @@ const token = await new SignJWT({})
               {versions.map((v) => (
                 <tr key={v.id}>
                   <td className={`${td} font-semibold`}>
-                    v{v.number} {v.id === bot.publishedVersionId && <Badge tone="good">Yayında</Badge>}
+                    <Link href={`/admin/yayin/${v.id}`} className="text-accent hover:underline">
+                      v{v.number}
+                    </Link>{" "}
+                    {v.id === bot.publishedVersionId && <Badge tone="good">Yayında</Badge>}
                   </td>
                   <td className={`${td} whitespace-nowrap text-muted`}>{fmtDateTime(v.publishedAt)}</td>
                   <td className={`${td} text-muted`}>{v.publishedBy}</td>
                   <td className={td}>{v.note ?? <span className="text-faint">—</span>}</td>
-                  <td className={`${td} tabular text-right`}>{v.kbSourceIds.length}</td>
+                  <td className={`${td} tabular text-right`}>{v.sourceCount}</td>
                   <td className={`${td} text-right`}>
                     {v.id !== bot.publishedVersionId && (
                       <form action={rollback} className="flex flex-col items-end gap-1.5">
@@ -273,6 +289,25 @@ const token = await new SignJWT({})
               ))}
             </tbody>
           </TableWrap>
+          {pages > 1 && (
+            <div className="mt-4 flex items-center justify-between text-sm text-muted">
+              <span className="tabular">
+                {totalVersions} sürüm · sayfa {page}/{pages}
+              </span>
+              <div className="flex gap-2">
+                {page > 1 && (
+                  <Link className={btn("secondary", "sm")} href={`/admin/yayin?sayfa=${page - 1}`}>
+                    Önceki
+                  </Link>
+                )}
+                {page < pages && (
+                  <Link className={btn("secondary", "sm")} href={`/admin/yayin?sayfa=${page + 1}`}>
+                    Sonraki
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -289,9 +324,13 @@ const token = await new SignJWT({})
             <code className="min-w-0 flex-1 truncate rounded-lg bg-sunken px-3 py-2 font-mono text-sm">{bot.publicKey}</code>
             <CopyButton text={bot.publicKey} />
           </div>
-          <a href={`/w/${bot.publicKey}?platform=web&deviceId=panel-onizleme`} target="_blank" className={`${btn("secondary", "sm")} mt-3`}>
-            <ExternalLink className="size-3.5" /> Sohbet ekranını aç
-          </a>
+          {published ? (
+            <Link href="/admin/egitim/test?hedef=yayin" className={`${btn("secondary", "sm")} mt-3`}>
+              <FlaskConical className="size-3.5" /> Yayındaki sürümle dene
+            </Link>
+          ) : (
+            <p className="mt-3 text-xs text-muted">Henüz yayınlanmış sürüm yok; yayınlandıktan sonra test alanında yayındaki sürümle deneyebilirsiniz.</p>
+          )}
         </Panel>
         <Panel title="Kullanıcı kimliği" description="Uygulamanız giriş yapmış kullanıcıyı kısa ömürlü bir token ile tanıtır. Böylece konuşma geçmişi cihazlar arasında korunur ve KVKK silme talepleri kullanıcı bazında yapılabilir.">
           <div className="grid gap-4">

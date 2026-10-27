@@ -75,7 +75,7 @@ export default async function KvkkPage({ searchParams }: { searchParams: SearchP
             </p>
           </Panel>
 
-          <Panel title="Silme talebi" description="Bir kullanıcının tüm konuşmalarını, fotoğraflarını ve kaydını siler.">
+          <Panel title="Silme talebi" description="Bir kullanıcının tüm konuşmalarını, fotoğraflarını ve kaydını siler. Konuşmadan kopyalanıp kaydedilmiş test senaryoları (ve koşu sonuçları) bu silmeye dahil değildir; gerekiyorsa Test senaryoları sayfasından elle silin.">
             <form action={handleDeletion} className="grid gap-3">
               <Field label="Kimlik türü" htmlFor="type">
                 <select id="type" name="type" className={selectCls}>
