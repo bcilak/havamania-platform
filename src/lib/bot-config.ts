@@ -98,6 +98,8 @@ export type BotConfig = {
   retrievalTopK: number;
   /** Kosinüs benzerliği bu değerin altındaki parçalar, kelime eşleşmesi yoksa bağlama girmez. */
   retrievalMinSimilarity: number;
+  /** Bağlama aynı kaynaktan en fazla bu kadar parça girer (komşu parçalar birleştirilir, aynı metinler teke iner). */
+  retrievalPerSourceMax: number;
   /** Alanda her yerde geçtiği için aramada ayırt edici olmayan kelimeler. */
   domainStopwords: string[];
   /** Asistanın yardım etmeyeceği konular (genel kurallara madde olarak eklenir). */
@@ -170,6 +172,7 @@ export function defaultBotConfig(): BotConfig {
     maxPhotoMb: 8,
     retrievalTopK: 6,
     retrievalMinSimilarity: 0.3,
+    retrievalPerSourceMax: 3,
     domainStopwords: ["hava", "durumu", "durum", "nasıl", "olacak"],
     blockedTopics: [],
     toneOverrides: {},
@@ -229,5 +232,10 @@ export function normalizeBotConfig(input: Partial<BotConfig> | null | undefined,
     };
   }
   const merged = { ...d, ...input, modes };
-  return { ...merged, blockedTopics: cleanTopics(merged.blockedTopics), toneOverrides: cleanToneOverrides(merged.toneOverrides) };
+  // null/boş/geçersiz → varsayılan (Number(null) 0 olurdu ve 1'e sıkıştırılırdı).
+  const perSource = merged.retrievalPerSourceMax == null || (merged.retrievalPerSourceMax as unknown) === "" ? Number.NaN : Number(merged.retrievalPerSourceMax);
+  return {
+    ...merged,
+    retrievalPerSourceMax: Number.isFinite(perSource) ? Math.min(10, Math.max(1, Math.round(perSource))) : d.retrievalPerSourceMax,
+    blockedTopics: cleanTopics(merged.blockedTopics), toneOverrides: cleanToneOverrides(merged.toneOverrides) };
 }

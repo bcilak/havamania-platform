@@ -35,3 +35,33 @@ describe("chunkText", () => {
     assert.equal(out[0].slice(-150), out[1].slice(0, 150));
   });
 });
+
+describe("chunkText (ReDoS)", () => {
+  const timed = (label: string, fn: () => void) => {
+    const t0 = performance.now();
+    fn();
+    const ms = performance.now() - t0;
+    assert.ok(ms < 500, `${label}: ${Math.round(ms)} ms`);
+  };
+
+  it("boşluksuz 400 bin noktalı dizi 500 ms altında işlenir", () => {
+    timed("nokta", () => chunkText(".".repeat(400_000)));
+    timed("nokta+boşluk sonu", () => chunkText(`${"a".repeat(1000)}${".".repeat(400_000)} b`));
+  });
+
+  it("'# a # # # …' ve uzun boşluklu başlık satırı 500 ms altında işlenir", () => {
+    timed("başlık", () => chunkText(`# a ${"# ".repeat(200_000)}`));
+    timed("başlık boşluk", () => chunkText(`# a${" ".repeat(400_000)}x`));
+    timed("diyez", () => chunkText(`# ${"#".repeat(400_000)}`));
+  });
+
+  it("boşluk benzeri tek tip karakterlerden oluşan uzun paragraf 500 ms altında işlenir", () => {
+    timed("form feed", () => chunkText(`a${"\f".repeat(400_000)}b`));
+    timed("satır sonu", () => chunkText(`a ${"\n \n".repeat(100_000)}b`));
+  });
+
+  it("uzun başlık satırı başlık sayılmaz, normal başlık bağlamı korunur", () => {
+    const out = chunkText(`# ${"x ".repeat(150)}\n\nİçerik.\n\n# Kısa Başlık\n\nGövde metni.`);
+    assert.ok(out.some((c) => c.startsWith("Bölüm: Kısa Başlık\n")));
+  });
+});

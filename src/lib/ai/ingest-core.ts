@@ -44,13 +44,15 @@ export async function planIngest(opts: {
   chunk: (text: string) => string[];
   /** null = embedding yapılandırılmamış. */
   embed: ((values: string[]) => Promise<number[][]>) | null;
+  /** Çıkarma aşamasından gelen uyarılar (seçilen kodlama, taranmış PDF şüphesi vb.). */
+  notes?: (string | null | undefined)[];
 }): Promise<IngestPlan> {
   const truncated = opts.rawText.length > MAX_CHARS;
   const text = opts.rawText.slice(0, MAX_CHARS);
   const pieces = opts.chunk(text);
   if (!pieces.length) throw new Error("Kaynaktan metin çıkarılamadı.");
 
-  const warnings: (string | null)[] = [truncated ? "Metnin ilk 400.000 karakteri alındı." : null];
+  const warnings: (string | null | undefined)[] = [...(opts.notes ?? []), truncated ? "Metnin ilk 400.000 karakteri alındı." : null];
   let vectors: number[][] | null = null;
   if (opts.embed) {
     try {

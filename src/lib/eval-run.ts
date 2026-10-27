@@ -1,8 +1,8 @@
 import { and, asc, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { evalCases, evalResults, evalRuns, type EvalRunSummary, type EvalTarget, type ToolCallRecord } from "@/db/schema";
-import { ChatError, prepareTurn, runTurnOnce } from "@/lib/ai/turn";
-import { describeError, redactErrorText } from "@/lib/ai/turn-core";
+import { prepareTurn, runTurnOnce } from "@/lib/ai/turn";
+import { describeError, describeEvalError, redactErrorText } from "@/lib/ai/turn-core";
 import { parseLocation } from "@/lib/ai/location";
 import { getPublishedVersion, getVersion, type BotRow } from "@/lib/bot";
 import { fmtUsd } from "@/lib/format";
@@ -297,9 +297,9 @@ export async function executeEvalRun(opts: { runId: string; bot: BotRow; target:
       latencyMs = res.latencyMs;
       if (signal.aborted && !error) error = `Zaman aşımı (${EVAL_LIMITS.caseTimeoutMs / 1000} sn)`;
     } catch (e) {
-      // Ham mesaj saklanmaz (kullanıcı girdisini yansıtabilir); ayrıntı sunucu günlüğünde.
+      // Sağlayıcı/SDK ham mesajı saklanmaz (kullanıcı girdisini yansıtabilir); bizim ChatError metinlerimiz korunur.
       console.error("[eval] senaryo hatası:", e);
-      error = e instanceof ChatError ? `Hazırlık hatası (HTTP ${e.status})` : describeError(e);
+      error = describeEvalError(e);
       latencyMs = Date.now() - started;
     }
 

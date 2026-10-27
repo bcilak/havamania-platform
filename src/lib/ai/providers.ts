@@ -7,6 +7,7 @@ import { db } from "@/db";
 import { providers, type ProviderKind, type ProviderModel } from "@/db/schema";
 import { decryptOrNull } from "@/lib/crypto";
 import { getSetting } from "@/lib/settings";
+import { embeddingPrice } from "./embedding-cost";
 import { modelMetaOrDefault } from "./model-meta";
 
 export type ProviderRow = typeof providers.$inferSelect;
@@ -99,14 +100,14 @@ export async function resolveModel(providerId: string, modelId: string): Promise
  * Embedding modeli. `ref` verilirse (yayındaki sürümün dondurulmuş ayarı) o kullanılır,
  * verilmezse güncel ayar. Ayar kapalıysa ya da sağlayıcı yoksa null.
  */
-export async function resolveEmbedding(ref?: { providerId: string | null; model: string | null }): Promise<{ model: EmbeddingModel; id: string } | null> {
+export async function resolveEmbedding(ref?: { providerId: string | null; model: string | null }): Promise<{ model: EmbeddingModel; id: string; pricePer1M: number } | null> {
   const cfg = ref ?? (await getSetting("embedding"));
   if (!cfg.providerId || !cfg.model) return null;
   const provider = await getProvider(cfg.providerId);
   if (!provider) return null;
   const f = factory(provider);
   if (!f.embed) return null;
-  return { model: f.embed(cfg.model), id: `${provider.kind}/${cfg.model}` };
+  return { model: f.embed(cfg.model), id: `${provider.kind}/${cfg.model}`, pricePer1M: embeddingPrice(provider.embeddingPrices, cfg.model) };
 }
 
 export function costOf(meta: ProviderModel, inputTokens: number, outputTokens: number): number {

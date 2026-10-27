@@ -167,6 +167,8 @@ function PromptPanel({ target, modes, initialMode }: { target: TurnTarget; modes
   );
 }
 
+const DEDUP_LABEL: Record<string, string> = { duplicate: "tekrar", cap: "kaynak başına sınır", merged: "komşu parçayla birleşti" };
+
 function PreviewResult({ r }: { r: PreviewResponse }) {
   const inCtx = r.hits.filter((h) => h.inContext).length;
   return (
@@ -201,7 +203,7 @@ function PreviewResult({ r }: { r: PreviewResponse }) {
               <li key={h.chunkId} className={cx("rounded-lg border border-line p-3 text-sm", !h.inContext && "bg-sunken/60 text-muted")}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium">{h.title}</span>
-                  <Badge tone={h.inContext ? "good" : "neutral"}>{h.inContext ? "bağlama girdi" : h.relevant ? "bağlama girmedi (sıra dışı)" : "bağlama girmedi (eşik altı)"}</Badge>
+                  <Badge tone={h.inContext ? "good" : "neutral"}>{h.inContext ? "bağlama girdi" : h.dedup ? `bağlama girmedi (${DEDUP_LABEL[h.dedup] ?? h.dedup})` : h.relevant ? "bağlama girmedi (sıra dışı)" : "bağlama girmedi (eşik altı)"}</Badge>
                   <span className="text-xs">{describeMatch(h) ?? "eşleşme zayıf"}</span>
                 </div>
                 <p className="mt-1.5 line-clamp-3 text-[13px] whitespace-pre-wrap">

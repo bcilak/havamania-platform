@@ -5,15 +5,18 @@ import { db } from "@/db";
 import { conversations, feedback, messages, providers } from "@/db/schema";
 import { BarList, DailyColumns, StatTile } from "@/components/admin/charts";
 import { ConfirmButton } from "@/components/client";
-import { Badge, btn, EmptyState, Flash, ModeBadge, PageHeader, Panel } from "@/components/ui";
+import { Badge, btn, EmptyState, Flash, ModeBadge, PageHeader, Panel, TableWrap, td, th } from "@/components/ui";
 import { requireAdmin } from "@/lib/auth";
 import { getMainBot, getPublishedVersion } from "@/lib/bot";
-import { MODES, MODE_META } from "@/lib/bot-config";
+import { MODES, MODE_META, TOOLS } from "@/lib/bot-config";
 import type { SearchParams } from "@/lib/form";
 import { fmtInt, fmtRelative, fmtUsd, PLATFORM_LABEL, truncate } from "@/lib/format";
+import { groupGaps } from "@/lib/gaps";
+import { maskPii, piiText } from "@/lib/pii-mask";
 import { can } from "@/lib/roles";
 import { getSetting } from "@/lib/settings";
-import { breakdown, dailyConversations, periodStats, unansweredQuestions } from "@/lib/stats";
+import { breakdown, dailyConversations, gapQuestions, periodStats, toolCounts, versionCounts, weeklyQuality } from "@/lib/stats";
+import { fmtPct, rateSeries, summarizeTools, versionQuality } from "@/lib/trends";
 import { deleteDemoData } from "./actions";
 
 export const metadata = { title: "Pano" };
@@ -68,7 +71,9 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
     );
   }
 
-  const [now, prev, daily, split, recent, openFb, unanswered, setup] = await Promise.all([
+  const canTrain = can(admin.role, "training");
+  const showPii = can(admin.role, "pii");
+  const [now, prev, daily, split, recent, openFb, gapQs, setup, weekly, tools, versions] = await Promise.all([
     periodStats(7),
     periodStats(7, 7),
     dailyConversations(14),
@@ -81,9 +86,17 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
       .where(and(eq(feedback.status, "open"), eq(feedback.rating, -1)))
       .orderBy(desc(feedback.createdAt))
       .limit(5),
-    unansweredQuestions(5),
+    gapQuestions({ days: 30 }),
     setupChecklist(),
+    weeklyQuality(8),
+    toolCounts(30),
+    versionCounts({ days: 30, limit: 5 }),
   ]);
+  const gaps = groupGaps(gapQs).slice(0, 5);
+  const negSeries = rateSeries(weekly, "negative");
+  const unaSeries = rateSeries(weekly, "unanswered");
+  const toolStats = summarizeTools(tools);
+  const quality = versionQuality(versions);
 
   const negRate = now.assistant ? now.negative / now.assistant : 0;
   const prevNegRate = prev.assistant ? prev.negative / prev.assistant : 0;
@@ -143,7 +156,13 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
           upIsGood={false}
           hint={`${fmtInt(now.negative)} / ${fmtInt(now.assistant)} cevap`}
         />
-        <StatTile label="Model maliyeti" value={fmtUsd(now.cost)} delta={change(now.cost, prev.cost)} upIsGood={false} />
+        <StatTile
+          label="Maliyet"
+          value={fmtUsd(now.cost)}
+          delta={change(now.cost, prev.cost)}
+          upIsGood={false}
+          hint={`model ${fmtUsd(now.model_cost)} · arama ${fmtUsd(now.search_cost)} · vektörleme ${fmtUsd(now.ingest_cost)}`}
+        />
       </div>
 
       <div className="mb-6 grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
@@ -164,6 +183,72 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
         </Panel>
       </div>
 
+      <div className="mb-6 grid gap-4 lg:grid-cols-2">
+        <Panel title="Olumsuz geri bildirim oranı" description="Haftalık, asistan cevaplarına göre; test alanı ve örnek veri hariç">
+          <DailyColumns data={negSeries} unit="" format={fmtPct} ariaLabel="Haftalık olumsuz geri bildirim oranı" />
+        </Panel>
+        <Panel title="Cevapsız oranı" description="Haftalık; bilgi tabanında karşılık bulunamayan ve araç kullanılmayan cevaplar">
+          <DailyColumns data={unaSeries} unit="" format={fmtPct} ariaLabel="Haftalık cevapsız oranı" />
+        </Panel>
+      </div>
+
+      <div className="mb-6 grid gap-4 lg:grid-cols-2">
+        <Panel title="Araç başarısı" description="Son 30 gün, araç başına çağrı ve hata oranı" bodyClassName="p-0">
+          {toolStats.length ? (
+            <TableWrap>
+              <thead>
+                <tr>
+                  <th className={th}>Araç</th>
+                  <th className={`${th} text-right`}>Çağrı</th>
+                  <th className={`${th} text-right`}>Hata</th>
+                  <th className={th}>En sık hata</th>
+                </tr>
+              </thead>
+              <tbody>
+                {toolStats.map((t) => (
+                  <tr key={t.name}>
+                    <td className={td}>{TOOLS[t.name as keyof typeof TOOLS]?.label ?? t.name}</td>
+                    <td className={`${td} tabular text-right`}>{fmtInt(t.calls)}</td>
+                    <td className={`${td} tabular text-right`}>
+                      {fmtInt(t.failed)} <span className="text-muted">({fmtPct(t.failurePct)})</span>
+                    </td>
+                    <td className={`${td} text-muted`}>{t.topCode ? `${t.topCode.code} (${t.topCode.n})` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </TableWrap>
+          ) : (
+            <p className="px-5 py-6 text-sm text-muted">Son 30 günde araç çağrısı yok.</p>
+          )}
+        </Panel>
+        <Panel title="Sürüm kalitesi" description="Son 30 gün, yayın sürümüne göre" bodyClassName="p-0">
+          {quality.length ? (
+            <TableWrap>
+              <thead>
+                <tr>
+                  <th className={th}>Sürüm</th>
+                  <th className={`${th} text-right`}>Cevap</th>
+                  <th className={`${th} text-right`}>Olumsuz</th>
+                  <th className={`${th} text-right`}>Cevapsız</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quality.map((v) => (
+                  <tr key={v.number}>
+                    <td className={td}>v{v.number}</td>
+                    <td className={`${td} tabular text-right`}>{fmtInt(v.assistant)}</td>
+                    <td className={`${td} tabular text-right`}>{fmtPct(v.negativePct)}</td>
+                    <td className={`${td} tabular text-right`}>{fmtPct(v.unansweredPct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </TableWrap>
+          ) : (
+            <p className="px-5 py-6 text-sm text-muted">Son 30 günde sürüme bağlı konuşma yok.</p>
+          )}
+        </Panel>
+      </div>
+
       <div className="grid gap-4 lg:grid-cols-3">
         <Panel
           title="Son konuşmalar"
@@ -179,7 +264,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
               {recent.map((c) => (
                 <li key={c.id}>
                   <Link href={`/admin/konusmalar/${c.id}`} className="block px-5 py-3 hover:bg-sunken">
-                    <div className="truncate text-sm font-medium">{c.title || "Başlıksız"}</div>
+                    <div className="truncate text-sm font-medium">{c.title ? piiText(showPii, c.title) : "Başlıksız"}</div>
                     <div className="mt-1 flex items-center gap-2 text-xs text-muted">
                       <ModeBadge mode={c.mode} />
                       <span>·</span>
@@ -211,7 +296,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
               {openFb.map((f) => (
                 <li key={f.id}>
                   <Link href={`/admin/konusmalar/${f.conversationId}#m-${f.messageId}`} className="block px-5 py-3 hover:bg-sunken">
-                    <div className="line-clamp-2 text-sm">{f.comment ? `“${f.comment}”` : truncate(f.content, 110)}</div>
+                    <div className="line-clamp-2 text-sm">{f.comment ? `“${piiText(showPii, f.comment)}”` : truncate(piiText(showPii, f.content), 110)}</div>
                     <div className="mt-1 text-xs text-muted">{fmtRelative(f.createdAt)}</div>
                   </Link>
                 </li>
@@ -223,32 +308,49 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
         </Panel>
 
         <Panel
-          title="Bilgi tabanında karşılığı olmayanlar"
-          description="Bot kaynak bulamadı ve araç kullanmadı. Eğitim için iyi adaylar."
+          title="En sık 5 boşluk"
+          description="Son 30 gün: karşılıksız kalan ya da beğenilmeyen cevapların benzer soruları bir arada. Eğitim için iyi adaylar."
           bodyClassName="p-0"
+          actions={
+            canTrain ? (
+              <Link href="/admin/egitim/bosluklar" className={btn("ghost", "sm")}>
+                Tümü
+              </Link>
+            ) : null
+          }
         >
-          {unanswered.length ? (
+          {gaps.length ? (
             <ul className="divide-y divide-line">
-              {unanswered.map((u) => (
-                <li key={u.id} className="px-5 py-3">
-                  <div className="line-clamp-2 text-sm">{u.question || "(fotoğraf)"}</div>
-                  <div className="mt-1.5 flex items-center gap-3 text-xs">
-                    <span className="text-muted">{MODE_META[u.mode as keyof typeof MODE_META]?.label}</span>
-                    <Link href={`/admin/konusmalar/${u.conversation_id}#m-${u.id}`} className="text-accent hover:underline">
-                      Konuşma
-                    </Link>
-                    <Link
-                      href={`/admin/egitim/bilgi-tabani?soru=${encodeURIComponent(u.question ?? "")}&mod=${u.mode}#sss`}
-                      className="text-accent hover:underline"
-                    >
-                      SSS'ye ekle
-                    </Link>
-                  </div>
-                </li>
-              ))}
+              {gaps.map((g) => {
+                // g.key ham (maskesiz) soru metnidir; React anahtarı RSC yüküne yazıldığı için messageId kullanılır.
+                const sssMode = MODES.find((m) => m === g.modes[0]?.mode) ?? "all";
+                return (
+                  <li key={g.target.messageId} className="px-5 py-3">
+                    <div className="line-clamp-2 text-sm">{showPii ? g.question : maskPii(g.question)}</div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                      <span className="tabular font-medium">{fmtInt(g.count)} soru</span>
+                      <span className="text-muted">{MODE_META[g.modes[0]?.mode as keyof typeof MODE_META]?.label}</span>
+                      <span className="text-muted">{fmtRelative(g.lastAt)}</span>
+                      <Link href={`/admin/konusmalar/${g.target.conversationId}#m-${g.target.messageId}`} className="text-accent hover:underline">
+                        Konuşma
+                      </Link>
+                      {canTrain && showPii && (
+                        <Link href={`/admin/egitim/bilgi-tabani?soru=${encodeURIComponent(g.question)}&mod=${sssMode}#sss`} className="text-accent hover:underline">
+                          SSS&apos;ye ekle
+                        </Link>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           ) : (
-            <p className="px-5 py-6 text-sm text-muted">Tüm sorular bir kaynağa ya da araca dayanıyor.</p>
+            <p className="px-5 py-6 text-sm text-muted">Son 30 günde karşılıksız ya da beğenilmeyen cevap yok.</p>
+          )}
+          {!showPii && gaps.length > 0 && (
+            <p className="border-t border-line px-5 py-3 text-xs text-muted">
+              Sorular maskelidir (e-posta, uzun rakam dizileri); maske en iyi çabayla çalışır, ad ya da adres gibi bilgiler görünebilir. SSS ekleme kişisel veri yetkisi ister.
+            </p>
           )}
         </Panel>
       </div>

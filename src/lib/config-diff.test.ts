@@ -120,3 +120,12 @@ describe("diffEmbeddings", () => {
     assert.equal(diffEmbeddings(e1, null, label).status, "unknown");
   });
 });
+
+describe("diffConfigs: kaynak başına en çok parça", () => {
+  it("değişimi sayısal ayar olarak özetler", () => {
+    const a = clone();
+    const b = clone();
+    b.retrievalPerSourceMax = 5;
+    assert.deepEqual(summarizeChanges(diffConfigs(a, b)), ["Kaynak başına en çok parça: 3 → 5"]);
+  });
+});

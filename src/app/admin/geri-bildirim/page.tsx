@@ -10,6 +10,7 @@ import { getMainBot } from "@/lib/bot";
 import { loadCorrectionStatus } from "@/lib/corrections";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtRelative } from "@/lib/format";
+import { piiText } from "@/lib/pii-mask";
 import { can } from "@/lib/roles";
 import { setFeedbackStatus } from "./actions";
 
@@ -21,6 +22,7 @@ export default async function FeedbackPage({ searchParams }: { searchParams: Sea
   const status = (["open", "resolved", "dismissed"].includes(param(sp, "durum")) ? param(sp, "durum") : "open") as "open" | "resolved" | "dismissed";
   const rating = param(sp, "oy") === "olumlu" ? 1 : -1;
   const canTrain = can(admin.role, "training");
+  const pii = can(admin.role, "pii");
 
   const rows = await db
     .select({
@@ -100,14 +102,14 @@ export default async function FeedbackPage({ searchParams }: { searchParams: Sea
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
                   <div className="mb-1 text-xs font-medium text-muted">Kullanıcının sorusu</div>
-                  <p className="text-sm leading-relaxed">{question || "(fotoğraf)"}</p>
+                  <p className="text-sm leading-relaxed">{question ? piiText(pii, question) : "(fotoğraf)"}</p>
                 </div>
                 <div>
                   <div className="mb-1 text-xs font-medium text-muted">Asistanın cevabı</div>
-                  <p className="line-clamp-5 text-sm leading-relaxed">{answer}</p>
+                  <p className="line-clamp-5 text-sm leading-relaxed">{piiText(pii, answer)}</p>
                 </div>
               </div>
-              {f.comment && <p className="mt-3 rounded-lg bg-sunken px-3 py-2 text-sm">“{f.comment}”</p>}
+              {f.comment && <p className="mt-3 rounded-lg bg-sunken px-3 py-2 text-sm">“{piiText(pii, f.comment)}”</p>}
               <div className="mt-3 flex flex-wrap gap-2">
                 {canTrain && rating === -1 && status === "open" && (
                   <Link href={`/admin/konusmalar/${f.conversationId}?duzelt=${f.messageId}#m-${f.messageId}`} className={btn("primary", "sm")}>

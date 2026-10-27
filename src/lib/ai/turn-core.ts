@@ -80,6 +80,19 @@ export function abortKind(signal: { reason?: unknown } | null | undefined): Abor
   return name === "TimeoutError" ? "timeout" : "user";
 }
 
+/**
+ * Sohbet hazırlığında fırlatılan, bizim ürettiğimiz hata: `message` sabit Türkçe metindir (kullanıcı girdisi içermez).
+ * `turn.ts` buradan yeniden dışa aktarır; saf yardımcıların (`describeEvalError`) test edilebilmesi için burada durur.
+ */
+export class ChatError extends Error {
+  constructor(
+    message: string,
+    public status = 400,
+  ) {
+    super(message);
+  }
+}
+
 /* ---------- Model hatası metni ---------- */
 
 const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]{1,39}$/;
@@ -99,6 +112,20 @@ export function describeError(e: unknown): string {
     cur = err.lastError ?? err.cause;
   }
   return "Model hatası";
+}
+
+const OWN_ERROR_MAX = 200;
+
+/**
+ * Senaryo koşusunda saklanacak hata metni. Kendi `ChatError` mesajlarımız (sistem üretimi, sabit metin) olduğu gibi
+ * korunur; yönetici neyin yanlış olduğunu görsün. Sağlayıcı/SDK hataları `describeError` ile genel metne iner.
+ */
+export function describeEvalError(e: unknown): string {
+  if (e instanceof ChatError) {
+    const msg = e.message.trim().slice(0, OWN_ERROR_MAX);
+    if (msg) return msg;
+  }
+  return describeError(e);
 }
 
 /** Kayıtlı hata metnini maskelemede: `describeError` biçimi kalır, başka her şey (eski ham mesajlar) genel sınıfa iner. */

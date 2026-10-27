@@ -14,9 +14,11 @@ import { MODES, TONES, TOOLS, toneRule, type BotConfig } from "@/lib/bot-config"
 import { diffConfigs, diffEmbeddings, type ConfigChange, type LineOp } from "@/lib/config-diff";
 import { param, type SearchParams } from "@/lib/form";
 import { VERSION_NOTE_MAX } from "@/lib/form-limits";
-import { fmtDateTime } from "@/lib/format";
+import { fmtDateTime, fmtInt } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getSetting } from "@/lib/settings";
+import { versionCounts } from "@/lib/stats";
+import { fmtPct, versionQuality } from "@/lib/trends";
 import { saveVersionNote } from "../actions";
 
 export const metadata = { title: "Sürüm ayrıntısı" };
@@ -133,6 +135,7 @@ function ConfigView({ config, providerNames }: { config: BotConfig; providerName
               ["Fotoğraf", config.photosEnabled ? `Açık (en çok ${config.maxPhotoMb} MB)` : "Kapalı"],
               ["Bilgi tabanından parça", String(config.retrievalTopK)],
               ["İlgililik eşiği", String(config.retrievalMinSimilarity)],
+              ["Kaynak başına en çok parça", String(config.retrievalPerSourceMax)],
               ["Hata mesajı", config.fallbackMessage],
             ]}
           />
@@ -180,6 +183,8 @@ export default async function VersionDetailPage({ params, searchParams }: { para
   const info = new Map(rows.map((r) => [r.id, r]));
   const titleOf = (id: string) => info.get(id)?.title ?? "artık yok";
   const embLabel = (e: EmbeddingRef) => embeddingLabel(e, providerRows);
+
+  const [quality] = versionQuality(await versionCounts({ versionNumber: version.number, limit: 1 }));
 
   const isPublished = version.id === bot.publishedVersionId;
   const canTrain = can(admin.role, "training");
@@ -270,6 +275,25 @@ export default async function VersionDetailPage({ params, searchParams }: { para
           </form>
         </Panel>
       </div>
+
+      <Panel
+        title="Kalite özeti"
+        description="Bu sürümle yapılan gerçek kullanıcı konuşmaları (tüm zamanlar; test alanı ve örnek veri hariç)."
+        className="mb-6"
+      >
+        {quality ? (
+          <KeyValue
+            items={[
+              ["Konuşma", fmtInt(quality.conversations)],
+              ["Asistan cevabı", fmtInt(quality.assistant)],
+              ["Olumsuz geri bildirim", `${fmtPct(quality.negativePct)} (${fmtInt(quality.negative)} / ${fmtInt(quality.assistant)})`],
+              ["Cevapsız", `${fmtPct(quality.unansweredPct)} (${fmtInt(quality.unanswered)} / ${fmtInt(quality.assistant)})`],
+            ]}
+          />
+        ) : (
+          <p className="text-sm text-muted">Bu sürümle henüz gerçek kullanıcı cevabı yok.</p>
+        )}
+      </Panel>
 
       <Panel title="Başka bir sürümle karşılaştır" description="Ayar farkları, bilgi tabanında eklenen / çıkan / yeniden işlenen kaynaklar ve embedding modeli. Fark eskiden yeniye gösterilir." className="mb-6">
         <form method="get" className="flex flex-wrap items-end gap-2">

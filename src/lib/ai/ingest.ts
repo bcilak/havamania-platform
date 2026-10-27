@@ -1,6 +1,5 @@
 import { embedMany } from "ai";
 import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
-import mammoth from "mammoth";
 import { parse } from "node-html-parser";
 import { db } from "@/db";
 import { kbChunks, kbSources } from "@/db/schema";
@@ -8,16 +7,23 @@ import { beginReprocess } from "@/lib/kb";
 import { safeFetchText } from "@/lib/net/safe-fetch";
 import { storage } from "@/lib/storage";
 import { chunkText } from "./chunking";
+import { decodeText, docxToText, nodeToText, pdfPagesToText } from "./extract-text";
 import { CLAIMABLE_STATUSES, planIngest, STALE_PROCESSING_MS } from "./ingest-core";
+import { embeddingCostOf } from "./embedding-cost";
+import { recordEmbeddingUsage } from "./embedding-usage";
 import { resolveEmbedding } from "./providers";
 
 type SourceRow = typeof kbSources.$inferSelect;
 
-async function extractPdf(data: Uint8Array): Promise<string> {
+/** Çıkarılan metin ve panelde uyarı olarak gösterilecek notlar. */
+type Extracted = { text: string; notes: (string | null)[] };
+
+async function extractPdf(data: Uint8Array): Promise<Extracted> {
   const { extractText, getDocumentProxy } = await import("unpdf");
   const pdf = await getDocumentProxy(data);
-  const { text } = await extractText(pdf, { mergePages: true });
-  return Array.isArray(text) ? text.join("\n\n") : text;
+  const { text } = await extractText(pdf, { mergePages: false });
+  const { text: joined, warning } = pdfPagesToText(Array.isArray(text) ? text : [text]);
+  return { text: joined, notes: [warning] };
 }
 
 export async function fetchUrlText(url: string): Promise<{ title: string; text: string }> {
@@ -27,7 +33,7 @@ export async function fetchUrlText(url: string): Promise<{ title: string; text: 
   root.querySelectorAll("script,style,noscript,svg,nav,footer,header,form,iframe").forEach((n) => n.remove());
   const title = root.querySelector("title")?.text.trim() || url;
   const main = root.querySelector("main") ?? root.querySelector("article") ?? root.querySelector("body") ?? root;
-  return { title, text: main.structuredText };
+  return { title, text: nodeToText(main) };
 }
 
 /**
@@ -38,11 +44,11 @@ export async function fetchUrlText(url: string): Promise<{ title: string; text: 
 const owned = (sourceId: string, claimedAt: Date) =>
   and(eq(kbSources.id, sourceId), eq(kbSources.status, "processing"), eq(kbSources.updatedAt, claimedAt));
 
-async function extract(source: SourceRow, claimedAt: Date): Promise<string> {
+async function extract(source: SourceRow, claimedAt: Date): Promise<Extracted> {
   switch (source.type) {
     case "qa":
     case "correction":
-      return `Soru: ${source.question ?? ""}\nCevap: ${source.answer ?? ""}`;
+      return { text: `Soru: ${source.question ?? ""}\nCevap: ${source.answer ?? ""}`, notes: [] };
     case "url": {
       if (!source.url) throw new Error("URL eksik.");
       const { title, text } = await fetchUrlText(source.url);
@@ -50,21 +56,21 @@ async function extract(source: SourceRow, claimedAt: Date): Promise<string> {
       if (source.title === source.url && title) {
         await db.update(kbSources).set({ title: title.slice(0, 200) }).where(owned(source.id, claimedAt));
       }
-      return text;
+      return { text, notes: [] };
     }
     case "cms":
-      return source.answer ?? "";
+      return { text: source.answer ?? "", notes: [] };
     case "file": {
       if (!source.storageKey) throw new Error("Dosya bulunamadı.");
       const file = await storage.get(source.storageKey);
       if (!file) throw new Error("Dosya depoda bulunamadı.");
       const mt = source.mediaType ?? file.contentType;
       if (mt.includes("pdf")) return extractPdf(file.data);
-      if (mt.includes("wordprocessingml")) {
-        const { value } = await mammoth.extractRawText({ buffer: Buffer.from(file.data) });
-        return value;
+      if (mt.includes("wordprocessingml")) return { text: await docxToText(file.data), notes: [] };
+      if (mt.startsWith("text/")) {
+        const { text, note } = decodeText(file.data);
+        return { text, notes: [note] };
       }
-      if (mt.startsWith("text/")) return new TextDecoder().decode(file.data);
       throw new Error("Desteklenmeyen dosya türü. PDF, DOCX, TXT veya MD yükleyin.");
     }
   }
@@ -97,16 +103,28 @@ export async function processSource(sourceId: string): Promise<void> {
     .returning();
   if (!source) return;
   try {
-    const rawText = await extract(source, claimedAt);
+    const { text: rawText, notes } = await extract(source, claimedAt);
     const emb = await resolveEmbedding().catch(() => null);
     const single = source.type === "qa" || source.type === "correction";
+    // Vektörleme kullanımı: token (AI SDK usage) × sağlayıcıdaki embedding fiyatı.
+    let embeddingTokens = 0;
     const plan = await planIngest({
       rawText,
+      notes,
       chunk: (t) => (single ? [t] : chunkText(t)),
-      embed: emb ? async (values) => (await embedMany({ model: emb.model, values, maxParallelCalls: 2 })).embeddings : null,
+      embed: emb
+        ? async (values) => {
+            const res = await embedMany({ model: emb.model, values, maxParallelCalls: 2 });
+            embeddingTokens = res.usage?.tokens ?? 0;
+            return res.embeddings;
+          }
+        : null,
     });
     const { text, pieces, vectors, warning } = plan;
     const embeddingModel = vectors && emb ? emb.id : null;
+    const tokens = vectors && emb ? embeddingTokens : 0;
+    // Harcama olay anında kaydedilir (sonuç sahiplik kaybıyla atılsa da para harcandı).
+    if (tokens && emb) await recordEmbeddingUsage({ botId: source.botId, sourceId, kind: "ingest", tokens, costUsd: embeddingCostOf(tokens, emb.pricePer1M) });
 
     await db.transaction(async (tx) => {
       // Kaynak satırı sahiplik koşuluyla kilitlenir: parça silme + ekleme sırayla çalışır ve
@@ -128,7 +146,16 @@ export async function processSource(sourceId: string): Promise<void> {
       );
       await tx
         .update(kbSources)
-        .set({ status: "ready", warning, charCount: text.length, chunkCount: pieces.length, embeddingModel, updatedAt: new Date() })
+        .set({
+          status: "ready",
+          warning,
+          charCount: text.length,
+          chunkCount: pieces.length,
+          embeddingModel,
+          embeddingTokens: tokens || null,
+          embeddingCostUsd: tokens && emb ? embeddingCostOf(tokens, emb.pricePer1M) : null,
+          updatedAt: new Date(),
+        })
         .where(owned(sourceId, claimedAt));
     });
   } catch (e) {

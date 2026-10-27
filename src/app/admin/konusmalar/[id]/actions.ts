@@ -11,8 +11,11 @@ import type { SimilarState } from "@/lib/ai/similar-core";
 import { createCorrection } from "@/lib/corrections";
 import { emptyExpect, EVAL_LIMITS } from "@/lib/eval";
 import { bool, done, fail, str, strStrict } from "@/lib/form";
+import { safeAdminPath } from "@/lib/form-limits";
+import { can } from "@/lib/roles";
 import { storage } from "@/lib/storage";
 
+const GAPS_BACK_RE = /^\/admin\/egitim\/bosluklar(\?[A-Za-z0-9=&%_.~-]*)?$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function toggleFlag(fd: FormData) {
@@ -69,7 +72,7 @@ export async function addCorrection(fd: FormData): Promise<SimilarState> {
 export async function togglePhoto(fd: FormData) {
   const admin = await requireAdmin("photos");
   const id = str(fd, "id");
-  const back = str(fd, "back") || "/admin/fotograflar";
+  const back = safeAdminPath(str(fd, "back"), "/admin/fotograflar");
   const [a] = await db.select().from(attachments).where(eq(attachments.id, id));
   if (!a) fail(back, "Fotoğraf bulunamadı.");
   await db.update(attachments).set({ hidden: !a!.hidden }).where(eq(attachments.id, id));
@@ -81,7 +84,7 @@ export async function togglePhoto(fd: FormData) {
 export async function deletePhoto(fd: FormData) {
   const admin = await requireAdmin("kvkk");
   const id = str(fd, "id");
-  const back = str(fd, "back") || "/admin/fotograflar";
+  const back = safeAdminPath(str(fd, "back"), "/admin/fotograflar");
   const [a] = await db.select().from(attachments).where(eq(attachments.id, id));
   if (!a) fail(back, "Fotoğraf bulunamadı.");
   await storage.remove(a!.storageKey).catch(() => {});
@@ -98,11 +101,15 @@ export async function deletePhoto(fd: FormData) {
  */
 export async function addCaseFromMessage(fd: FormData) {
   const admin = await requireAdmin("training");
+  // Soru metni kullanıcı verisidir; maskeli görenler (pii yetkisi yok) senaryo oluşturamaz.
+  if (!can(admin.role, "pii")) fail("/admin/egitim/bosluklar", "Senaryo oluşturmak için kişisel veri yetkisi gerekir.");
   const conversationId = str(fd, "conversationId");
   const messageId = str(fd, "messageId");
   if (!UUID_RE.test(conversationId)) fail("/admin/konusmalar", "Konuşma bulunamadı.");
   if (!UUID_RE.test(messageId)) fail(`/admin/konusmalar/${conversationId}`, "Mesaj bulunamadı.");
-  const back = `/admin/konusmalar/${conversationId}#m-${messageId}`;
+  // Boşluk analizi sayfasından gelen istek, hata durumunda o sayfaya döner (yalnızca bu yola izin verilir; açık yönlendirme yok).
+  const backParam = str(fd, "back", 300);
+  const back = GAPS_BACK_RE.test(backParam) ? backParam : `/admin/konusmalar/${conversationId}#m-${messageId}`;
   const question = strStrict(fd, "question", EVAL_LIMITS.questionMax, "Soru", back);
   if (!question) fail(back, "Soru boş olamaz.");
   if (!bool(fd, "piiOk")) fail(back, "Soruda kişisel veri olmadığını onaylamanız gerekir.");

@@ -6,6 +6,8 @@
  */
 import { SignJWT } from "jose";
 import postgres from "postgres";
+import { stripCitations } from "../src/lib/ai/citations";
+import { isFollowUp } from "../src/lib/ai/retrieval-core";
 import { storage } from "../src/lib/storage";
 
 const BASE = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
@@ -27,6 +29,10 @@ const token = await new SignJWT({ role: admin.role, email: admin.email, name: ad
   .sign(new TextEncoder().encode(process.env.SESSION_SECRET!));
 const cookie = `hm_admin=${token}`;
 
+/* ---------- Saf mantık: yanlış birleşme ve atıf temizliği ---------- */
+check("Takip sorusu: kısa ama bağımsız soru (METAR nedir?, UV indeksi nedir?) birleşmiyor", !isFollowUp("METAR nedir?") && !isFollowUp("UV indeksi nedir?") && isFollowUp("peki yarın?"), "");
+check("Atıf temizliği: atıf dışı köşeli parantez ve bağlantı metni korunuyor", stripCitations("Sıcaklık [10, 15] derece, dizi[0], [1](https://o.com) ve [2].", 3) === "Sıcaklık [10, 15] derece, dizi[0], [1](https://o.com) ve.", "");
+
 /* ---------- Admin sayfaları ---------- */
 const pages: [string, string][] = [
   ["/admin", "Pano"],
@@ -43,6 +49,8 @@ const pages: [string, string][] = [
   ["/admin/egitim/kisilik?mod=agro", "Kişilik ve ton"],
   ["/admin/egitim/kisilik?mod=kurallar", "Ortak kurallar"],
   ["/admin/egitim/duzeltmeler", "Düzeltmeler"],
+  ["/admin/egitim/bosluklar", "Boşluk analizi"],
+  ["/admin/egitim/bosluklar?gun=7&mod=agro", "Boşluk analizi"],
   ["/admin/egitim/test", "Test alanı"],
   ["/admin/yayin", "Sürümler ve gömme"],
   ["/admin/ayarlar/modeller", "Modeller"],
@@ -54,6 +62,9 @@ const pages: [string, string][] = [
   ["/admin/yasal", "Yasal sayfalar"],
 ];
 if (demoConv) pages.splice(7, 0, [`/admin/konusmalar/${demoConv.id}`, "Ayrıntılar"]);
+// Sürüm ayrıntı sayfası kalite özetini gösterir (yayınlanmış sürüm yoksa atlanır).
+const [anyVersion] = await sql`select id from bot_versions order by published_at desc limit 1`;
+if (anyVersion) pages.push([`/admin/yayin/${anyVersion.id}`, "Kalite özeti"]);
 for (const [path, expect] of pages) {
   const t = Date.now();
   const res = await fetch(BASE + path, { headers: { cookie }, redirect: "manual" });
@@ -202,6 +213,88 @@ if (pubVer) {
   const ppPub = await pp({ ...ppQ, target: "published" }, { cookie });
   const ppPubJson = await ppPub.json().catch(() => ({}));
   check("Prompt önizleme: yayındaki sürüm", ppPub.status === 200 && ppPubJson.targetLabel === `v${pubVer.number}`, `${ppPub.status} · ${ppPubJson.targetLabel ?? ppPubJson.error}`);
+}
+
+/* ---------- Boşluk analizi ve pano: yetki ve kişisel veri maskesi ---------- */
+const gapCookie = `hm_admin=${supportToken}`;
+const gapDenied = await fetch(BASE + "/admin/egitim/bosluklar", { headers: { cookie: gapCookie }, redirect: "manual" });
+check("Boşluk analizi: destek rolü reddedilir", gapDenied.status === 307 && (gapDenied.headers.get("location") ?? "").includes("/admin?hata=yetki"), `${gapDenied.status} ${gapDenied.headers.get("location")}`);
+// Gerçek (örnek olmayan) bir konuşmada, telefon numarası içeren ve üç kez tekrarlanan karşılıksız soru.
+const [gapBot] = await sql`select id from bots order by created_at limit 1`;
+const gapConv = crypto.randomUUID();
+const gapPhone = "0555 123 45 67";
+await sql`insert into conversations (id, bot_id, mode, platform, version_number, is_demo) values (${gapConv}, ${gapBot.id}, 'agro', 'web', 1, false)`;
+for (let i = 0; i < 3; i++) {
+  await sql`insert into messages (conversation_id, role, content, created_at) values (${gapConv}, 'user', ${`Smokegap fideleri sulayayım beni ${gapPhone} arayın`}, now() - make_interval(secs => ${i * 10 + 5}))`;
+  await sql`insert into messages (conversation_id, role, content, unanswered, tool_calls, created_at) values (${gapConv}, 'assistant', 'Bilgim yok.', true, ${JSON.stringify([{ name: "forecast", input: {}, output: { ok: false, error: "x", code: "timeout" } }])}::text::jsonb, now() - make_interval(secs => ${i * 10 + 4}))`;
+}
+try {
+  const gapAdminHtml = await (await fetch(BASE + "/admin/egitim/bosluklar", { headers: { cookie } })).text();
+  check("Boşluk analizi: grup, örnek soru ve eylemler görünüyor", gapAdminHtml.includes("Smokegap") && /3(<!-- -->)? soru/.test(gapAdminHtml) && gapAdminHtml.includes("Senaryoya ekle"), "");
+  const panoSupport = await fetch(BASE + "/admin", { headers: { cookie: gapCookie } });
+  const panoSupportHtml = await panoSupport.text();
+  check("Pano (destek): 200, boşluk sorusunda telefon maskeli", panoSupport.status === 200 && panoSupportHtml.includes("Smokegap") && !panoSupportHtml.includes(gapPhone) && panoSupportHtml.includes("••••"), `${panoSupport.status}`);
+  check("Pano (destek): eğitim eylemleri (SSS, boşluk sayfası) gösterilmiyor", !panoSupportHtml.includes("/admin/egitim/bosluklar") && !panoSupportHtml.includes("bilgi-tabani?soru="), "");
+  check("Pano (destek): telefon bağlantı/forma da sızmıyor (ham ve URL kodlu)", !panoSupportHtml.includes(encodeURIComponent(gapPhone)) && !panoSupportHtml.includes("0555") && panoSupportHtml.includes("en iyi çabayla"), "");
+  const panoAdminHtml = await (await fetch(BASE + "/admin", { headers: { cookie } })).text();
+  check("Pano (yönetici): boşluk grubu ve araç tablosu", panoAdminHtml.includes("Smokegap") && panoAdminHtml.includes("En sık 5 boşluk") && panoAdminHtml.includes("Araç başarısı") && panoAdminHtml.includes("timeout"), "");
+} finally {
+  await sql`delete from conversations where id = ${gapConv}`;
+}
+/* ---------- Destek rolü: konuşma detayı, liste, geri bildirim ve debug ucu kişisel veri sızdırmaz ---------- */
+{
+  const piiPhone = "0532 987 65 43";
+  const piiLat = "39.925533";
+  const piiLon = "32.866287";
+  const piiMail = "smokepii.kisi@example.com";
+  const piiEnlem = "41.0082";
+  const piiConv = crypto.randomUUID();
+  await sql`insert into conversations (id, bot_id, mode, platform, version_number, is_demo, title) values (${piiConv}, ${gapBot.id}, 'agro', 'web', 1, false, ${`Smokepii ${piiPhone}`})`;
+  await sql`insert into messages (conversation_id, role, content, created_at) values (${piiConv}, 'user', ${`Smokepii konumum ${piiLat}, ${piiLon} ve ${piiPhone} ${piiMail}`}, now() - interval '2 seconds')`;
+  const tools = [{ name: "current_weather", input: { lat: Number(piiLat), lon: Number(piiLon), location: "Smokepiikoy", enlem: Number(piiEnlem), merkez: [Number(piiEnlem), 28.9784] }, output: { ok: true, data: { city: "Smokepiikoy", latitude: Number(piiLat), longitude: Number(piiLon), temp: 21 } } }];
+  const [am] = await sql`insert into messages (conversation_id, role, content, search_query, tool_calls, created_at) values (${piiConv}, 'assistant', ${`Tamam ${piiPhone} numarasını not aldım`}, ${`hava ${piiLat} ${piiLon}`}, ${JSON.stringify(tools)}::text::jsonb, now() - interval '1 second') returning id`;
+  await sql`insert into feedback (message_id, conversation_id, rating, comment) values (${am.id}, ${piiConv}, -1, ${`Beni ${piiPhone} arayın ${piiMail}`})`;
+  const raws = [piiPhone, piiLat, piiLon, piiMail, "Smokepiikoy", "987 65 43"];
+  const leaks = (html: string) => raws.filter((r) => html.includes(r) || html.includes(encodeURIComponent(r)));
+  try {
+    const sup = (path: string) => fetch(BASE + path, { headers: { cookie: gapCookie } });
+    const detail = await sup(`/admin/konusmalar/${piiConv}`);
+    const detailHtml = await detail.text();
+    check("Destek: konuşma detayı 200, içerik okunabilir ve maskeli", detail.status === 200 && detailHtml.includes("Smokepii") && detailHtml.includes("••••"), `${detail.status}`);
+    check("Destek: konuşma detayı HTML + RSC yükünde telefon/e-posta/koordinat/konum adı yok", leaks(detailHtml).length === 0, leaks(detailHtml).join(" | "));
+    const list = await (await sup(`/admin/konusmalar?q=Smokepii&aralik=tumu`)).text();
+    check("Destek: konuşma listesi başlığı maskeli", list.includes("Smokepii") && leaks(list).length === 0, leaks(list).join(" | "));
+    const blocked = await (await sup(`/admin/konusmalar?q=${encodeURIComponent(piiPhone)}&aralik=tumu`)).text();
+    // Next, istek URL'sini (destek kullanıcısının kendi yazdığı arama) RSC yüküne yansıtır; bu mesaj verisi değil, yok sayılır.
+    const blockedLeaks = leaks(blocked.replaceAll(`q=${piiPhone.replaceAll(" ", "+")}`, "q=").replaceAll(`q=${encodeURIComponent(piiPhone)}`, "q="));
+    check(
+      "Destek: telefon desenli arama engellenir (mesaj içeriği sorgulanamaz)",
+      !blocked.includes("Smokepii") && blocked.includes("aramalar yapılamaz") && blockedLeaks.length === 0,
+      `sonuç sızdı: ${blocked.includes("Smokepii")} · uyarı var: ${blocked.includes("aramalar yapılamaz")} · ham değer: ${blockedLeaks.join(" | ") || "yok"}`,
+    );
+    // ILIKE jokeri ("_") ile telefon çıkarımı: harf dışı karakterler atılınca 3'ten uzun rakam dizisi olduğu için engellenir.
+    const wildcard = await (await sup(`/admin/konusmalar?q=${encodeURIComponent(piiPhone.replaceAll(" ", "_"))}&aralik=tumu`)).text();
+    check(
+      "Destek: '_' jokerli telefon araması boş sonuç döner, ham değer sızmaz",
+      !wildcard.includes("Smokepii") && wildcard.includes("aramalar yapılamaz") && leaks(wildcard).length === 0,
+      `sonuç sızdı: ${wildcard.includes("Smokepii")} · uyarı var: ${wildcard.includes("aramalar yapılamaz")} · ham değer: ${leaks(wildcard).join(" | ") || "yok"}`,
+    );
+    check("Destek: konuşma detayında 'enlem' anahtarlı ham koordinat yok", !detailHtml.includes(piiEnlem), "");
+    const fbHtml = await (await sup(`/admin/geri-bildirim`)).text();
+    check("Destek: geri bildirim yorumu ve mesajlar maskeli", fbHtml.includes("arayın") && leaks(fbHtml).length === 0, leaks(fbHtml).join(" | "));
+    const panoHtml = await (await sup(`/admin`)).text();
+    check("Destek: pano (geri bildirim, son konuşmalar) maskeli", leaks(panoHtml).length === 0, leaks(panoHtml).join(" | "));
+    const dbg = await sup(`/api/admin/messages/${am.id}`);
+    const dbgText = await dbg.text();
+    check("Destek: /api/admin/messages/[id] araç JSON ve sorgu maskeli", dbg.status === 200 && leaks(dbgText).length === 0 && dbgText.includes("current_weather") && dbgText.includes("temp"), leaks(dbgText).join(" | "));
+    // Yetkili rol ham veriyi görmeye devam eder.
+    const adminDetail = await (await fetch(BASE + `/admin/konusmalar/${piiConv}`, { headers: { cookie } })).text();
+    check("Yönetici: konuşma detayında ham değerler görünür", adminDetail.includes(piiLat) && adminDetail.includes(piiMail) && adminDetail.includes("Smokepiikoy"), "");
+    const adminDbg = await (await fetch(BASE + `/api/admin/messages/${am.id}`, { headers: { cookie } })).text();
+    check("Yönetici: debug ucu ham araç verisi döner", adminDbg.includes(piiLat) && adminDbg.includes("Smokepiikoy"), "");
+  } finally {
+    await sql`delete from conversations where id = ${piiConv}`;
+  }
 }
 await sql`delete from admin_users where id = ${supportUser.id}`;
 

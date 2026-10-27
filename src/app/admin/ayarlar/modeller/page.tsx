@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { providers, type ProviderKind } from "@/db/schema";
 import { ConfirmButton, SubmitButton } from "@/components/client";
 import { Badge, checkboxCls, EmptyState, Field, Flash, inputCls, Notice, PageHeader, Panel, selectCls, textareaCls } from "@/components/ui";
+import { formatEmbeddingLines } from "@/lib/ai/embedding-cost";
 import { effectiveEmbedding, embeddingLabel, sameEmbedding } from "@/lib/ai/embedding-freeze";
 import { PROVIDER_KINDS } from "@/lib/ai/providers";
 import { requireAdmin } from "@/lib/auth";
@@ -152,8 +153,8 @@ export default async function ModelsPage({ searchParams }: { searchParams: Searc
                   Fiyatlar yalnızca panodaki maliyet takibi içindir; sağlayıcınızın güncel fiyat sayfasından girin. Bilinmiyorsa 0 bırakın.
                 </p>
                 {kind.embeddings && (
-                  <Field label="Embedding modelleri" htmlFor={`e-${p.id}`} hint="Virgülle ya da satır satır. Bilgi tabanı vektör araması için.">
-                    <textarea id={`e-${p.id}`} name="embeddingModels" rows={2} defaultValue={p.embeddingModels.join("\n")} className={`${textareaCls} font-mono text-[13px]`} />
+                  <Field label="Embedding modelleri" htmlFor={`e-${p.id}`} hint="Satır satır. Fiyat için model kimliğinin yanına 1 milyon token başına USD yazın (örn. text-embedding-3-small 0.02); vektörleme ve arama maliyeti buna göre hesaplanır, boşsa 0 sayılır.">
+                    <textarea id={`e-${p.id}`} name="embeddingModels" rows={2} defaultValue={formatEmbeddingLines(p.embeddingModels, p.embeddingPrices)} className={`${textareaCls} font-mono text-[13px]`} />
                   </Field>
                 )}
                 <div className="flex justify-end">

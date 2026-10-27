@@ -38,8 +38,18 @@ async function playChat(body: Record<string, unknown>) {
     body: JSON.stringify({ playground: true, ...body }),
   });
   if (!res.ok) return { status: res.status, error: ((await res.json().catch(() => ({}))) as { error?: string }).error ?? "" };
-  await res.text().catch(() => "");
-  return { status: res.status, error: "" };
+  // Akış satırlarından cevap metni (test alanında atıflar [n] görünür).
+  let text = "";
+  for (const line of (await res.text().catch(() => "")).split("\n")) {
+    if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+    try {
+      const ev = JSON.parse(line.slice(6));
+      if (ev.type === "text-delta") text += ev.delta;
+    } catch {
+      /* akış dışı satır */
+    }
+  }
+  return { status: res.status, error: "", text };
 }
 
 async function session(deviceId: string, userToken?: string) {
@@ -149,7 +159,7 @@ await sleep(400);
 const [noKb] = await sql`select unanswered, sources from messages where conversation_id = ${convNoKb} and role = 'assistant'`;
 check("Bilgi tabanında karşılığı olmayan soru: unanswered=true, sources=[]", !!noKb && noKb.unanswered === true && noKb.sources.length === 0, noKb ? `unanswered=${noKb.unanswered} · ${noKb.sources.length} kaynak` : "kayıt yok");
 const convKb = crypto.randomUUID();
-await chat(s.token, { conversationId: convKb, mode: "genel", text: "Zirvepulsar katsayısı nedir?" });
+const rKb = await chat(s.token, { conversationId: convKb, mode: "genel", text: "Zirvepulsar katsayısı nedir?" });
 await sleep(400);
 const [withKb] = await sql`select unanswered, sources from messages where conversation_id = ${convKb} and role = 'assistant'`;
 const top = withKb?.sources?.[0];
@@ -157,6 +167,67 @@ check(
   "Bilgi tabanındaki SSS bulunuyor: sources[0].similarity dolu, unanswered=false",
   !!top && typeof top.similarity === "number" && top.similarity > 0.3 && withKb.unanswered === false,
   top ? `${top.title} · benzerlik ${top.similarity}` : "kaynak yok",
+);
+
+/* ---------- 4b2. Takip sorusu sorgusu, kısaltma araması, [n] atıf, embedding maliyeti ---------- */
+// Sahte model, bilgi tabanı parçası verilince [1] ile atıf yapar (eski mock: /__last-chat "cites" alanı yok → atıf kontrolleri atlanır).
+const mockCites = (await fetch(`${MOCK}/__last-chat`).then((r) => (r.ok ? r.json() : null)).catch(() => null))?.cites === true;
+const sF = await session(`e2e-takip-${Date.now()}`);
+const convF = crypto.randomUUID();
+await chat(sF.token, { conversationId: convF, mode: "genel", text: "Zirvepulsar katsayısı nedir?" });
+await sleep(300);
+await chat(sF.token, { conversationId: convF, mode: "genel", text: "peki yarın?" });
+await sleep(400);
+const [fu] = await sql`select search_query, sources from messages where conversation_id = ${convF} and role = 'assistant' order by created_at desc limit 1`;
+check(
+  "Takip sorusu: arama sorgusu önceki kullanıcı mesajıyla birleşti ve SSS bulundu",
+  !!fu && fu.search_query?.includes("Zirvepulsar") && fu.search_query.includes("peki yarın") && fu.sources.some((x: { title: string }) => x.title === "E2E SSS"),
+  fu ? `sorgu="${fu.search_query}" · ${fu.sources.length} kaynak` : "kayıt yok",
+);
+const [single] = await sql`select search_query from messages where conversation_id = ${convKb} and role = 'assistant'`;
+check("Bağımsız soruda sorgu yalnızca o mesajdır", single?.search_query === "Zirvepulsar katsayısı nedir?", `${single?.search_query}`);
+
+const convAbbr = crypto.randomUUID();
+await chat(sF.token, { conversationId: convAbbr, mode: "genel", text: "FQ kısaltması ne demek" });
+await sleep(400);
+const [ab] = await sql`select sources from messages where conversation_id = ${convAbbr} and role = 'assistant'`;
+const abHit = ab?.sources?.find((x: { title: string }) => x.title === "E2E kısaltma");
+check("2 harfli kısaltma (FQ) tam eşleşmeyle bulunuyor (lexical=true)", !!abHit && abHit.lexical === true, abHit ? `${abHit.title} · lexical=${abHit.lexical}` : "kaynak yok");
+
+const [kbMsg] = await sql`select content, sources, cost_usd, input_tokens, output_tokens, embedding_tokens, embedding_cost_usd from messages where conversation_id = ${convKb} and role = 'assistant'`;
+if (mockCites) {
+  check("Son kullanıcı akışında ve kayıtlı cevapta [n] atfı yok", !/\[\d/.test(rKb.text) && !/\[\d/.test(kbMsg?.content ?? "[1]") && rKb.text.length > 20, `akış: ${rKb.text.slice(-60).replace(/\n/g, " ")}`);
+  const pg = await playChat({ conversationId: crypto.randomUUID(), mode: "genel", text: "Zirvepulsar katsayısı nedir?" });
+  await sleep(500);
+  const [pm] = await sql`select m.content, m.sources from messages m join conversations c on c.id = m.conversation_id where m.role = 'assistant' and c.platform = 'playground' order by m.created_at desc limit 1`;
+  check(
+    "Test alanı: akışta [1] görünür, kayıtta kaynak cited=true, kayıtlı metinde [n] yok",
+    /\[1\]/.test(pg.text ?? "") && pm?.sources?.[0]?.cited === true && !/\[\d/.test(pm.content),
+    `cited=${pm?.sources?.[0]?.cited} · akışta [1]: ${/\[1\]/.test(pg.text ?? "")}`,
+  );
+  check("Widget cevabında kaynak cited=true işaretli (panelde görünür)", kbMsg?.sources?.[0]?.cited === true, `cited=${kbMsg?.sources?.[0]?.cited}`);
+} else {
+  check("[n] atıf kontrolleri atlandı (mock eski; npm run mock'u yeniden başlatın)", true, "atlandı");
+}
+
+const [embProv] = await sql`select embedding_prices from providers where name = 'E2E sahte model'`;
+const embPrice = Number(embProv?.embedding_prices?.["mock-embed"] ?? 0);
+const [modelMeta] = await sql`select (models->0->>'inputPer1M')::float as inp, (models->0->>'outputPer1M')::float as outp from providers where name = 'E2E sahte model'`;
+const modelCost = (kbMsg.input_tokens / 1e6) * modelMeta.inp + (kbMsg.output_tokens / 1e6) * modelMeta.outp;
+const embCost = (kbMsg.embedding_tokens / 1e6) * embPrice;
+check(
+  "Sorgu embedding'i: embedding_tokens > 0 ve cost_usd = model + embedding maliyeti",
+  kbMsg.embedding_tokens > 0 && embPrice > 0 && Math.abs(Number(kbMsg.embedding_cost_usd) - embCost) < 2e-6 && Math.abs(Number(kbMsg.cost_usd) - (modelCost + embCost)) < 3e-6,
+  `${kbMsg.embedding_tokens} token · embedding $${kbMsg.embedding_cost_usd} · toplam $${kbMsg.cost_usd} (beklenen ${(modelCost + embCost).toFixed(6)})`,
+);
+const [ingested] = await sql`select embedding_tokens, embedding_cost_usd from kb_sources where bot_id = ${bot.id} and title = 'E2E SSS' and deleted_at is null order by created_at desc limit 1`;
+check("Ingest embedding'i kaynağa yazıldı (embedding_tokens > 0, maliyet = token × fiyat)", ingested?.embedding_tokens > 0 && Math.abs(Number(ingested.embedding_cost_usd) - (ingested.embedding_tokens / 1e6) * embPrice) < 2e-6, `${ingested?.embedding_tokens} token · $${ingested?.embedding_cost_usd}`);
+const { periodStats } = await import("../src/lib/stats");
+const st = await periodStats(1);
+check(
+  "Pano maliyeti: model + arama + vektörleme toplamı (test alanı hariç)",
+  st.search_cost > 0 && st.ingest_cost > 0 && Math.abs(st.cost - (st.model_cost + st.search_cost + st.ingest_cost)) < 1e-4,
+  `toplam $${st.cost.toFixed(6)} = model ${st.model_cost.toFixed(6)} + arama ${st.search_cost.toFixed(6)} + vektörleme ${st.ingest_cost.toFixed(6)}`,
 );
 
 /* ---------- 4c. Canlı veri araçları: hata yolları (mock: #arac:<ad>:<q>, q = __500 | __timeout | __badjson) ---------- */

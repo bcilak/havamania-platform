@@ -108,3 +108,15 @@ describe("toneRule: prototip anahtarları", () => {
     }
   });
 });
+
+describe("normalizeBotConfig: retrievalPerSourceMax", () => {
+  it("eski kayıtta (alan yok) varsayılan 3 olur, geçersiz/aşırı değer 1..10'a çekilir", () => {
+    const old = defaultBotConfig() as Partial<BotConfig>;
+    delete old.retrievalPerSourceMax;
+    assert.equal(normalizeBotConfig(old, { frozen: true }).retrievalPerSourceMax, 3);
+    assert.equal(normalizeBotConfig({ ...defaultBotConfig(), retrievalPerSourceMax: 99 }).retrievalPerSourceMax, 10);
+    assert.equal(normalizeBotConfig({ ...defaultBotConfig(), retrievalPerSourceMax: 0 }).retrievalPerSourceMax, 1);
+    assert.equal(normalizeBotConfig({ ...defaultBotConfig(), retrievalPerSourceMax: null as unknown as number }).retrievalPerSourceMax, 3);
+    assert.equal(normalizeBotConfig({ ...defaultBotConfig(), retrievalPerSourceMax: Number.NaN }).retrievalPerSourceMax, 3);
+  });
+});

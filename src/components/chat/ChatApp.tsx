@@ -59,7 +59,11 @@ type Debug = {
   costUsd: number | null;
   unanswered: boolean;
   error: string | null;
-  sources: { title: string; score: number; snippet: string; similarity?: number | null; lexical?: boolean }[];
+  sources: { title: string; score: number; snippet: string; similarity?: number | null; lexical?: boolean; cited?: boolean }[];
+  /** Bilgi tabanında gerçekte aranan sorgu (takip sorularında önceki mesajla birleşir). */
+  searchQuery?: string | null;
+  embeddingTokens?: number | null;
+  embeddingCostUsd?: number | null;
   toolCalls: { name: string; input: unknown; output: unknown }[];
 };
 
@@ -710,8 +714,14 @@ function DebugPanel({ d }: { d: Debug }) {
           </span>
         )}
         {d.costUsd != null && <span>${Number(d.costUsd).toFixed(4)}</span>}
+        {d.embeddingTokens ? <span>arama {d.embeddingTokens} token{d.embeddingCostUsd ? ` · $${Number(d.embeddingCostUsd).toFixed(6)}` : ""}</span> : null}
         {d.unanswered && <span className="font-medium text-warn">Bilgi tabanında karşılık yok</span>}
       </div>
+      {d.searchQuery && (
+        <div className="text-muted">
+          Aranan sorgu: <span className="font-mono">{d.searchQuery}</span>
+        </div>
+      )}
       {d.error && <div className="font-mono break-all text-bad">{d.error}</div>}
       {d.sources.length > 0 && (
         <details>
@@ -721,7 +731,10 @@ function DebugPanel({ d }: { d: Debug }) {
           <ul className="mt-1.5 grid gap-1.5">
             {d.sources.map((s, i) => (
               <li key={i}>
-                <span className="font-medium">{s.title}</span>{describeMatch(s) && <span className="text-muted"> · {describeMatch(s)}</span>}
+                <span className="font-medium">{s.title}</span>
+                <span className="text-muted"> · [{i + 1}]</span>
+                {s.cited && <span className="font-medium text-good"> · cevapta anıldı</span>}
+                {describeMatch(s) && <span className="text-muted"> · {describeMatch(s)}</span>}
                 <p className="line-clamp-2 text-muted">{s.snippet}</p>
               </li>
             ))}

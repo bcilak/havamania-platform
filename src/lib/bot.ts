@@ -51,7 +51,7 @@ export async function listVersionSummaries(botId: string, opts: { limit: number;
       note: botVersions.note,
       publishedBy: botVersions.publishedBy,
       publishedAt: botVersions.publishedAt,
-      sourceCount: sql<number>`jsonb_array_length(${botVersions.kbSourceIds})`.mapWith(Number),
+      sourceCount: sql<number>`case when jsonb_typeof(${botVersions.kbSourceIds}) = 'array' then jsonb_array_length(${botVersions.kbSourceIds}) else 0 end`.mapWith(Number),
     })
     .from(botVersions)
     .where(eq(botVersions.botId, botId))

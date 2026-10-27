@@ -128,7 +128,7 @@ http
     let raw = "";
     for await (const c of req) raw += c;
     const body = JSON.parse(raw || "{}");
-    lastChat = { model: body.model ?? null, max_tokens: body.max_tokens ?? null, max_completion_tokens: body.max_completion_tokens ?? null, at: Date.now() };
+    lastChat = { model: body.model ?? null, max_tokens: body.max_tokens ?? null, max_completion_tokens: body.max_completion_tokens ?? null, cites: true, at: Date.now() };
     const msgs = body.messages || [];
     const last = msgs[msgs.length - 1] || {};
     const lastUser = [...msgs].reverse().find((m) => m.role === "user");
@@ -150,12 +150,15 @@ http
       reply = `Test cevabı: “${userText.slice(0, 80)}” sorusunu aldım.${hasImage ? " Fotoğrafı da gördüm." : ""}\n\n1. Bu bir sahte modeldir\n2. Akış kelime kelime gelir`;
     }
     const slow = /YAVAS/.test(userText);
+    // Bilgi tabanı parçası verilmişse sahte model [1] ile atıf yapar; atıf akışta bölünür ("[", "1", "].").
+    const citeTail = !toolCall && last.role !== "tool" && system.includes('<kaynak no="1"') ? ["Bilgi tabanından [", "1", "]."] : [];
+    const fullReply = citeTail.length ? `${reply}\n\n${citeTail.join("")}` : reply;
 
     const id = `mock-${Date.now()}`;
     const base = { id, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model: body.model };
     if (!body.stream) {
       res.writeHead(200, { "content-type": "application/json" });
-      return res.end(JSON.stringify({ ...base, object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }], usage: { ...usage, completion_tokens: 12 } }));
+      return res.end(JSON.stringify({ ...base, object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: fullReply }, finish_reason: "stop" }], usage: { ...usage, completion_tokens: 12 } }));
     }
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
     const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
@@ -174,6 +177,12 @@ http
         send({ ...base, choices: [{ index: 0, delta: { content: w }, finish_reason: null }] });
         usage.completion_tokens++;
         await sleep(slow ? 250 : 25);
+      }
+      for (const piece of citeTail.length ? ["\n\n", ...citeTail] : []) {
+        if (closed) return;
+        send({ ...base, choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] });
+        usage.completion_tokens++;
+        await sleep(25);
       }
       send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
     }

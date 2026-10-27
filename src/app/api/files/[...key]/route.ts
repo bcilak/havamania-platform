@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { can } from "@/lib/roles";
 import { ADMIN_COOKIE, verifyAdminSession, verifyFileSignature } from "@/lib/session";
 import { storage } from "@/lib/storage";
 
@@ -10,6 +11,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const admin = signed ? null : await verifyAdminSession(request.cookies.get(ADMIN_COOKIE)?.value);
   if (!signed && !admin) return NextResponse.json({ error: "Yetkisiz." }, { status: 403 });
   if (key.startsWith("kb/") && !admin) return NextResponse.json({ error: "Yetkisiz." }, { status: 403 });
+  // Kullanıcı fotoğrafları yalnızca "photos" iznine sahip rollere açık (imzalı bağlantı sahibi etkilenmez).
+  if (key.startsWith("photos/") && admin && !can(admin.role, "photos")) return NextResponse.json({ error: "Yetkisiz." }, { status: 403 });
 
   const file = await storage.get(key);
   if (!file) return NextResponse.json({ error: "Dosya bulunamadı." }, { status: 404 });

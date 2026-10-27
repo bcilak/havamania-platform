@@ -84,7 +84,7 @@ export default async function SourceDetailPage({ params, searchParams }: { param
         const used = await db
           .select({ id: botVersions.id, number: botVersions.number })
           .from(botVersions)
-          .where(and(eq(botVersions.botId, bot.id), sql`${botVersions.kbSourceIds} @> ${JSON.stringify([cid])}::jsonb`))
+          .where(and(eq(botVersions.botId, bot.id), sql`${botVersions.kbSourceIds} @> ${JSON.stringify([cid])}::text::jsonb`))
           .orderBy(asc(botVersions.number));
         return [cid, used] as const;
       }),

@@ -26,6 +26,8 @@ export const LIMITS = {
   promptPreviewPerMin: envInt("RATE_LIMIT_PROMPT_PREVIEW_PER_MIN", 20),
   /** Bilgi tabanı kaynağında deneme araması (embedding çağrısı yapar); yönetici başına. */
   kbSearchPerMin: envInt("RATE_LIMIT_KB_SEARCH_PER_MIN", 20),
+  /** Boşluk analizinde anlamsal birleştirme (embedding çağrısı yapar); yönetici başına. */
+  gapSemanticPerMin: envInt("RATE_LIMIT_GAP_SEMANTIC_PER_MIN", 6),
 };
 
 /** true: istek geçebilir. */

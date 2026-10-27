@@ -77,6 +77,8 @@ export type SourceRecord = {
   similarity?: number | null;
   lexical?: boolean;
   rank?: number;
+  /** Cevapta [n] ile anılan kaynak (n = rank). Eski kayıtlarda yok. Son kullanıcıya gösterilmez; yalnızca panelde. */
+  cited?: boolean;
 };
 
 /** Kayıtlı test senaryosunun beklenen ölçütleri (hepsi isteğe bağlı; deterministik kontrol). */
@@ -160,6 +162,8 @@ export const providers = pgTable("providers", {
   baseUrl: text("base_url"),
   models: jsonb("models").$type<ProviderModel[]>().default([]).notNull(),
   embeddingModels: jsonb("embedding_models").$type<string[]>().default([]).notNull(),
+  /** Embedding modeli → 1 milyon token için USD (maliyet takibi). Fiyatı girilmemiş model 0 sayılır. */
+  embeddingPrices: jsonb("embedding_prices").$type<Record<string, number>>().default({}).notNull(),
   createdAt: created(),
 });
 
@@ -231,6 +235,9 @@ export const kbSources = pgTable(
     charCount: integer("char_count").default(0).notNull(),
     chunkCount: integer("chunk_count").default(0).notNull(),
     embeddingModel: text("embedding_model"),
+    /** Son işlemede vektörleme için harcanan token ve maliyet (USD); embedding kapalıysa boş. */
+    embeddingTokens: integer("embedding_tokens"),
+    embeddingCostUsd: numeric("embedding_cost_usd", { precision: 12, scale: 6, mode: "number" }),
     /** Düzeltmeler ve SSS aramada öne çıkar. */
     priority: integer("priority").default(0).notNull(),
     createdBy: text("created_by"),
@@ -238,6 +245,29 @@ export const kbSources = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => [index("kb_sources_bot_idx").on(t.botId)],
+);
+
+/**
+ * Vektörleme (embedding) maliyetinin olay kaydı: kaynak işlenirken ya da boşluk analizinde anlamsal birleştirme
+ * yapıldığında bir satır eklenir, sonradan değişmez. Panoda maliyet olay anına göre döneme yazılır (kaynak
+ * yeniden işlenince önceki maliyet silinmez). `kb_sources.embedding_*` yalnızca "son işlem" bilgisidir.
+ * source_id'ye FK yoktur: kaynak kalıcı silinse de harcama kaydı kalır.
+ */
+export const kbEmbeddingUsage = pgTable(
+  "kb_embedding_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    botId: uuid("bot_id")
+      .references(() => bots.id, { onDelete: "cascade" })
+      .notNull(),
+    sourceId: uuid("source_id"),
+    /** ingest: kaynak işleme; gap_semantic: boşluk analizi anlamsal birleştirme. */
+    kind: text("kind").$type<"ingest" | "gap_semantic">().default("ingest").notNull(),
+    tokens: integer("tokens").notNull(),
+    costUsd: numeric("cost_usd", { precision: 12, scale: 6, mode: "number" }).notNull(),
+    createdAt: created(),
+  },
+  (t) => [index("kb_embedding_usage_created_idx").on(t.createdAt), index("kb_embedding_usage_source_idx").on(t.sourceId)],
 );
 
 export const kbChunks = pgTable(
@@ -341,12 +371,23 @@ export const messages = pgTable(
     model: text("model"),
     inputTokens: integer("input_tokens"),
     outputTokens: integer("output_tokens"),
+    /** Model + arama (sorgu embedding'i) maliyeti toplamı. */
     costUsd: numeric("cost_usd", { precision: 12, scale: 6, mode: "number" }),
+    /** Bilgi tabanı aramasında gerçekte kullanılan sorgu (takip sorularında önceki mesajla birleşir). */
+    searchQuery: text("search_query"),
+    /** Sorgu embedding'inin token sayısı ve maliyeti (cost_usd'nin içinde); vektör araması yapılmadıysa boş. */
+    embeddingTokens: integer("embedding_tokens"),
+    embeddingCostUsd: numeric("embedding_cost_usd", { precision: 12, scale: 6, mode: "number" }),
     latencyMs: integer("latency_ms"),
     error: text("error"),
     createdAt: created(),
   },
-  (t) => [index("messages_conversation_idx").on(t.conversationId, t.createdAt)],
+  (t) => [
+    index("messages_conversation_idx").on(t.conversationId, t.createdAt),
+    // Pano sorguları dönemle süzer (created_at aralığı); rol de süzülürse (role, created_at).
+    index("messages_created_idx").on(t.createdAt),
+    index("messages_role_created_idx").on(t.role, t.createdAt),
+  ],
 );
 
 export const attachments = pgTable(

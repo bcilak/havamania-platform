@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SourceRecord, ToolCallRecord } from "@/db/schema";
-import { abortedContent, abortKind, abortedUsage, describeError, effectiveTarget, exposeTurnData, promptChars, redactErrorText } from "./turn-core";
+import { abortedContent, abortKind, abortedUsage, ChatError, describeError, describeEvalError, effectiveTarget, exposeTurnData, promptChars, redactErrorText } from "./turn-core";
 
 const tool: ToolCallRecord = { name: "current_weather", input: { location: "Bursa" }, output: { ok: true, data: { secret: 1 } } };
 const source = { sourceId: "s1", title: "SSS", snippet: "x", score: 1 } as SourceRecord;
@@ -76,6 +76,20 @@ describe("iptal/zaman aşımı kullanımı", () => {
     assert.equal(describeError(Object.assign(new Error("x"), { cause: { code: "ECONNRESET" } })), "Model hatası (ECONNRESET)");
     assert.equal(describeError(new DOMException(leak, "TimeoutError")), "Zaman aşımı");
     assert.ok(!describeError(Object.assign(new Error(leak), { code: "has space TC 123" })).includes("TC"));
+  });
+
+  it("describeEvalError: kendi ChatError mesajımız korunur, sağlayıcı/SDK hataları genel metne iner", () => {
+    const own = "Bu mod için henüz bir yapay zekâ modeli seçilmedi.";
+    assert.equal(describeEvalError(new ChatError(own, 503)), own);
+    assert.equal(describeEvalError(new ChatError("x".repeat(500))).length, 200);
+    // Boş ChatError mesajı genel metne düşer.
+    assert.equal(describeEvalError(new ChatError("  ")), "Model hatası");
+    const leak = "Invalid prompt: TC 12345678901 Ali Veli";
+    assert.equal(describeEvalError(new Error(leak)), "Model hatası");
+    assert.equal(describeEvalError(Object.assign(new Error(leak), { statusCode: 429 })), "Sağlayıcı hatası (HTTP 429)");
+    assert.equal(describeEvalError(leak), "Model hatası");
+    // Maskeleme kuralı değişmez: korunan ChatError metni senaryo silinince genel sınıfa iner.
+    assert.equal(redactErrorText(own), "Model hatası");
   });
 
   it("redactErrorText: yalnızca describeError biçimi kalır, eski ham mesaj genel sınıfa iner", () => {

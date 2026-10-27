@@ -13,6 +13,7 @@ import { MODE_DISCLAIMERS, MODE_META } from "@/lib/bot-config";
 import { loadCorrectionStatus } from "@/lib/corrections";
 import type { SearchParams } from "@/lib/form";
 import { fmtDateTime, fmtInt, fmtTime, fmtUsd, maskId, PLATFORM_LABEL } from "@/lib/format";
+import { piiPayload, piiText } from "@/lib/pii-mask";
 import { can } from "@/lib/roles";
 import { SourceForm } from "@/components/admin/SourceForm";
 import { addCaseFromMessage, addCorrection, deleteConversation, deletePhoto, toggleFlag, togglePhoto } from "./actions";
@@ -44,7 +45,8 @@ export default async function ConversationDetail({ params, searchParams }: { par
   const fixStatus = fixes.length ? await loadCorrectionStatus(await getMainBot()) : null;
 
   const pii = can(admin.role, "pii");
-  const canTrain = can(admin.role, "training");
+  // Düzeltme/senaryo formları ham metni forma gömer; yalnızca kişisel veriyi görebilen rollere açılır.
+  const canTrain = can(admin.role, "training") && pii;
   const canDelete = can(admin.role, "kvkk");
   const self = `/admin/konusmalar/${id}`;
   const disclaimer = MODE_DISCLAIMERS[c.mode];
@@ -55,7 +57,7 @@ export default async function ConversationDetail({ params, searchParams }: { par
         <ChevronLeft className="size-4" /> Konuşmalar
       </Link>
       <PageHeader
-        title={c.title || "Başlıksız konuşma"}
+        title={c.title ? piiText(pii, c.title) : "Başlıksız konuşma"}
         actions={
           <>
             <form action={toggleFlag}>
@@ -118,14 +120,14 @@ export default async function ConversationDetail({ params, searchParams }: { par
                     )}
                   </div>
 
-                  {m.content && <div className="text-[15px] leading-relaxed whitespace-pre-wrap">{m.content}</div>}
+                  {m.content && <div className="text-[15px] leading-relaxed whitespace-pre-wrap">{piiText(pii, m.content)}</div>}
                   {m.error && (
                     <div className="mt-2 flex items-start gap-2 rounded-lg bg-bad-soft px-3 py-2 text-xs">
                       <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-bad" />
-                      <span className="font-mono break-all">{m.error}</span>
+                      <span className="font-mono break-all">{piiText(pii, m.error)}</span>
                     </div>
                   )}
-                  {fb?.comment && <p className="mt-2 rounded-lg bg-sunken px-3 py-2 text-sm">Kullanıcı yorumu: “{fb.comment}”</p>}
+                  {fb?.comment && <p className="mt-2 rounded-lg bg-sunken px-3 py-2 text-sm">Kullanıcı yorumu: “{piiText(pii, fb.comment)}”</p>}
 
                   {own.length > 0 && (
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -169,7 +171,7 @@ export default async function ConversationDetail({ params, searchParams }: { par
                             {m.toolCalls.map((t, ti) => (
                               <div key={ti} className="grid gap-1.5">
                                 <div className="font-mono text-xs font-medium">{t.name}</div>
-                                <Json value={{ girdi: t.input, çıktı: t.output }} />
+                                <Json value={piiPayload(pii, { girdi: t.input, çıktı: t.output })} />
                               </div>
                             ))}
                           </div>
@@ -179,12 +181,16 @@ export default async function ConversationDetail({ params, searchParams }: { par
                         <details className="rounded-lg border border-line">
                           <summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-[13px] text-muted hover:text-ink">
                             <BookOpen className="size-3.5" /> {m.sources.length} bilgi tabanı kaynağı kullanıldı
+                            {m.sources.some((s) => s.cited) ? ` (${m.sources.filter((s) => s.cited).length} tanesi cevapta anıldı)` : ""}
                           </summary>
+                          {m.searchQuery && <p className="border-t border-line px-3 py-2 text-xs text-muted">Aranan sorgu: <span className="font-mono">{piiText(pii, m.searchQuery)}</span></p>}
                           <ul className="divide-y divide-line border-t border-line">
                             {m.sources.map((s, si) => (
                               <li key={si} className="px-3 py-2.5 text-sm">
                                 <div className="flex items-center gap-2">
                                   <span className="font-medium">{s.title}</span>
+                                  <span className="text-xs text-muted">[{si + 1}]</span>
+                                  {s.cited && <Badge tone="good">cevapta anıldı</Badge>}
                                   <span className="tabular ml-auto text-xs text-muted">{describeMatch(s)}</span>
                                 </div>
                                 <p className="mt-1 line-clamp-3 text-[13px] text-muted">{s.snippet}</p>

@@ -93,6 +93,7 @@ export async function saveRules(fd: FormData) {
     config.maxPhotoMb = num(fd, "maxPhotoMb", 8, 1, 20);
     config.retrievalTopK = num(fd, "retrievalTopK", 6, 1, 15);
     config.retrievalMinSimilarity = num(fd, "retrievalMinSimilarity", 0.3, 0, 1);
+    config.retrievalPerSourceMax = num(fd, "retrievalPerSourceMax", 3, 1, 10);
     config.domainStopwords = stopwords;
     config.blockedTopics = blocked.value;
     config.toneOverrides = tones.value;

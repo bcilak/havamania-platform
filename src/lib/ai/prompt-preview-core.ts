@@ -42,14 +42,14 @@ export function clip(text: string, max: number): { text: string; truncated: bool
   return text.length > max ? { text: text.slice(0, max), truncated: true } : { text, truncated: false };
 }
 
-/** Eşik üstü ilk `topK` parça bağlama girer; geri kalanı (eşik altı ya da sıra dışı) yalnızca önizlemede görünür. */
+/** Eşik üstü, tekilleştirmede elenmemiş ilk `topK` parça bağlama girer; geri kalanı (eşik altı ya da sıra dışı) yalnızca önizlemede görünür. */
 export function splitContext(
   ranked: RankedKnowledgeHit[],
   topK: number,
 ): { context: KnowledgeHit[]; candidates: (RankedKnowledgeHit & { inContext: boolean })[] } {
   let used = 0;
   const candidates = ranked.map((h) => {
-    const inContext = h.relevant && used < topK;
+    const inContext = h.relevant && !h.dedup && used < topK;
     if (inContext) used++;
     return { ...h, inContext };
   });
@@ -80,8 +80,10 @@ export type PreviewHit = {
   lexical: boolean;
   /** Eşiği geçti (kosinüs ya da kelime eşleşmesi). */
   relevant: boolean;
-  /** Gerçekten prompt'a girdi (ilgili ve ilk K içinde). */
+  /** Gerçekten prompt'a girdi (ilgili, elenmemiş ve ilk K içinde). */
   inContext: boolean;
+  /** İlgili ama tekilleştirmede elendi: "duplicate" (tekrar), "cap" (kaynak başına sınır), "merged" (komşuyla birleşti). */
+  dedup: string | null;
   content: string;
   contentTruncated: boolean;
 };
@@ -121,6 +123,7 @@ export function shapePreview(opts: {
       lexical: h.lexical,
       relevant: h.relevant,
       inContext: h.inContext,
+      dedup: h.dedup ?? null,
       content: c.text,
       contentTruncated: c.truncated,
     };

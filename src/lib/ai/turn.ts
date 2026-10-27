@@ -16,15 +16,17 @@ import { normalizeBotConfig, TONES, TOOLS, type BotConfig, type ModeConfig, type
 import { getPublishedVersion, type BotRow, type BotVersionRow } from "@/lib/bot";
 import { storage } from "@/lib/storage";
 import { buildInstructions } from "./prompt";
+import { citedNumbers, stripCitations } from "./citations";
+import { embeddingCostOf } from "./embedding-cost";
 import { costOf, ModelConfigError, resolveModel } from "./providers";
 import { shapePreview, splitContext, type PreviewResponse } from "./prompt-preview-core";
-import { searchKnowledge, searchKnowledgeRanked, type KnowledgeHit, type RankedKnowledgeHit } from "./retrieval";
-import { isUnanswered } from "./retrieval-core";
+import { searchKnowledgeRanked, searchKnowledgeWithUsage, type KnowledgeHit, type RankedKnowledgeHit } from "./retrieval";
+import { buildSearchQuery, isUnanswered } from "./retrieval-core";
 import { buildTools } from "./tools";
 import type { UserLocation } from "./location";
 import { effectiveMaxOutputTokens, isReasoningModel } from "./model-meta";
-import { abortedContent, abortKind, abortedUsage, describeError, effectiveTarget, exposeTurnData, promptChars, type TurnTarget } from "./turn-core";
-import { redactToolStream } from "./ui-stream";
+import { abortedContent, abortKind, abortedUsage, ChatError, describeError, effectiveTarget, exposeTurnData, promptChars, type TurnTarget } from "./turn-core";
+import { redactToolStream, stripCitationStream } from "./ui-stream";
 
 /*
  * Bir sohbet turunun orkestratörü üç parçadır:
@@ -38,14 +40,7 @@ type AppUserRow = typeof appUsers.$inferSelect;
 type AttachmentRow = typeof attachments.$inferSelect;
 type Resolved = Awaited<ReturnType<typeof resolveModel>>;
 
-export class ChatError extends Error {
-  constructor(
-    message: string,
-    public status = 400,
-  ) {
-    super(message);
-  }
-}
+export { ChatError };
 
 export type { TurnTarget } from "./turn-core";
 
@@ -76,9 +71,12 @@ export type SavedAssistant = {
   unanswered: boolean;
   inputTokens: number;
   outputTokens: number;
+  /** Model + arama (sorgu embedding'i) maliyeti toplamı. */
   costUsd: number;
   latencyMs: number;
   error: string | null;
+  /** Kaynaklar; cevapta [n] ile anılanlar `cited: true`. */
+  sources: SourceRecord[];
 };
 
 export type PreparedTurn = {
@@ -96,6 +94,11 @@ export type PreparedTurn = {
   toolsAvailable: boolean;
   hits: KnowledgeHit[];
   sources: SourceRecord[];
+  /** Bilgi tabanında gerçekte aranan sorgu (takip sorularında önceki mesajla birleşir). */
+  searchQuery: string;
+  /** Sorgu embedding'inin token sayısı ve maliyeti (USD); vektör araması yapılmadıysa 0. */
+  embeddingTokens: number;
+  embeddingCostUsd: number;
   assistantId: string;
   modelLabel: string;
   /** persistAssistant ilk çağrıdan sonra sonucu tutar; tekrar çağrılırsa aynı kayıt döner. */
@@ -182,6 +185,7 @@ export async function previewPrompt(input: { bot: BotRow; mode: ChatMode; text: 
       topK: config.retrievalTopK,
       minSimilarity: config.retrievalMinSimilarity,
       domainStopwords: config.domainStopwords,
+      perSourceMax: config.retrievalPerSourceMax,
     });
   } catch (e) {
     console.error("[prompt-preview] bilgi tabanı araması başarısız:", e);
@@ -322,22 +326,29 @@ export async function prepareTurn(input: ChatInput): Promise<PreparedTurn> {
       .where(eq(conversations.id, conversationId));
   }
 
-  /* 8. Bilgi tabanı araması */
-  const lastUserText = [...history].reverse().find((m) => m.role === "user" && m.content)?.content ?? "";
-  const query = text || lastUserText;
+  /* 8. Bilgi tabanı araması: takip sorusunda sorgu önceki kullanıcı mesajıyla birleşir (kural tabanlı) */
+  const previousUserTexts = history.filter((m) => m.role === "user" && m.content).map((m) => m.content);
+  const { query, followUp } = buildSearchQuery(previousUserTexts, text);
   let hits: KnowledgeHit[] = [];
+  let embeddingTokens = 0;
+  let embeddingCostUsd = 0;
   if (query) {
     try {
-      hits = await searchKnowledge({
+      const found = await searchKnowledgeWithUsage({
         botId: bot.id,
         mode: input.mode,
         query,
+        alsoQuery: followUp ? text : undefined,
         allowedSourceIds,
         embedding: frozenEmbedding,
         topK: config.retrievalTopK,
         minSimilarity: config.retrievalMinSimilarity,
         domainStopwords: config.domainStopwords,
+        perSourceMax: config.retrievalPerSourceMax,
       });
+      hits = found.hits;
+      embeddingTokens = found.usage.embeddingTokens;
+      embeddingCostUsd = embeddingCostOf(embeddingTokens, found.usage.embeddingPricePer1M);
     } catch (e) {
       console.error("[chat] bilgi tabanı araması başarısız:", e);
     }
@@ -387,6 +398,9 @@ export async function prepareTurn(input: ChatInput): Promise<PreparedTurn> {
     toolsAvailable,
     hits,
     sources,
+    searchQuery: query,
+    embeddingTokens,
+    embeddingCostUsd,
     assistantId: crypto.randomUUID(),
     modelLabel: `${resolved.provider.kind}/${resolved.meta.id}`,
     saved: null,
@@ -400,9 +414,15 @@ export function persistAssistant(
 ): Promise<SavedAssistant> {
   if (turn.saved) return turn.saved;
   turn.saved = (async () => {
-    const { config, conversationId, assistantId, sources } = turn;
-    const cost = costOf(turn.resolved.meta, r.inTok, r.outTok);
-    const content = r.content || (r.error ? config.fallbackMessage : "");
+    const { config, conversationId, assistantId } = turn;
+    // Model + arama maliyeti; arama (sorgu embedding'i) ayrıca embedding_cost_usd'de tutulur.
+    const cost = costOf(turn.resolved.meta, r.inTok, r.outTok) + turn.embeddingCostUsd;
+    // Atıflar ([n]) modelden istenir ama son kullanıcıya gösterilmez: kayıtlı metinden silinir,
+    // hangi kaynakların anıldığı yalnızca kaynak kaydındaki `cited` alanında kalır (panelde görünür).
+    const rawContent = r.content || (r.error ? config.fallbackMessage : "");
+    const cited = new Set(citedNumbers(rawContent, turn.sources.length));
+    const content = stripCitations(rawContent, turn.sources.length);
+    const sources = turn.sources.map((s, i) => ({ ...s, cited: cited.has(i + 1) }));
     const unanswered = isUnanswered({ relevantHits: sources.length, toolCalls: r.toolCalls, error: r.error, aborted: r.aborted ?? false });
     const latencyMs = Date.now() - turn.started;
     if (turn.persist) {
@@ -418,6 +438,9 @@ export function persistAssistant(
         inputTokens: r.inTok,
         outputTokens: r.outTok,
         costUsd: cost,
+        searchQuery: turn.searchQuery || null,
+        embeddingTokens: turn.embeddingTokens || null,
+        embeddingCostUsd: turn.embeddingTokens ? turn.embeddingCostUsd : null,
         latencyMs,
         error: r.error,
       });
@@ -432,7 +455,7 @@ export function persistAssistant(
         })
         .where(eq(conversations.id, conversationId));
     }
-    return { id: assistantId, content, unanswered, inputTokens: r.inTok, outputTokens: r.outTok, costUsd: cost, latencyMs, error: r.error };
+    return { id: assistantId, content, unanswered, inputTokens: r.inTok, outputTokens: r.outTok, costUsd: cost, latencyMs, error: r.error, sources };
   })();
   return turn.saved;
 }
@@ -517,8 +540,9 @@ export function streamTurn(turn: PreparedTurn): Response {
     sendReasoning: false,
     onError: () => config.fallbackMessage,
   });
-  // Son kullanıcı (widget, mobil köprü) araç girdi/çıktısını ve ham hata metnini görmez; yalnızca test alanı görür.
-  return createUIMessageStreamResponse({ stream: input.platform === "playground" ? uiStream : redactToolStream(uiStream) });
+  // Son kullanıcı (widget, mobil köprü) araç girdi/çıktısını, ham hata metnini ve kaynak atıflarını ([n]) görmez;
+  // yalnızca test alanı görür.
+  return createUIMessageStreamResponse({ stream: input.platform === "playground" ? uiStream : redactToolStream(stripCitationStream(uiStream, turn.sources.length)) });
 }
 
 export type TurnResult = {
@@ -607,6 +631,6 @@ export async function runTurnOnce(turn: PreparedTurn): Promise<TurnResult> {
     outputTokens: saved.outputTokens,
     costUsd: saved.costUsd,
     latencyMs: saved.latencyMs,
-    ...exposeTurnData(input.platform, { toolCalls, sources: turn.sources }),
+    ...exposeTurnData(input.platform, { toolCalls, sources: saved.sources }),
   };
 }

@@ -7,6 +7,8 @@
  * Test alanı (playground) bu süzgeçten geçmez.
  */
 
+import { CitationStripper } from "./citations";
+
 type Chunk = { type: string; [k: string]: unknown };
 
 const GENERIC_ERROR = "Araç çalıştırılamadı.";
@@ -60,6 +62,38 @@ export function redactToolStream<T extends Chunk>(stream: ReadableStream<T>): Re
       transform(chunk, controller) {
         const out = redactToolChunk(chunk);
         if (out) controller.enqueue(out);
+      },
+    }),
+  );
+}
+
+/**
+ * Son kullanıcıya giden metinden kaynak atıflarını ([1], [2][3]) siler; kaynaklar kullanıcıya gösterilmez.
+ * Atıf parçalar arasında bölünebilir ("[" + "1]"): metin akışı id başına bekletilir, atıf tamamlanınca silinir,
+ * tamamlanmazsa metin bitince atılır. `sourceCount` kaynak sayısıdır: yalnızca 1..sourceCount numaralı, atıf biçimli işaretler
+ * silinir, kaynak yoksa (0) süzgeç atlanır. Test alanı (playground) bu süzgeçten geçmez; orada atıflar görünür.
+ */
+export function stripCitationStream<T extends Chunk>(stream: ReadableStream<T>, sourceCount?: number): ReadableStream<T> {
+  const strippers = new Map<string, CitationStripper>();
+  const forId = (id: string) => {
+    let s = strippers.get(id);
+    if (!s) strippers.set(id, (s = new CitationStripper(sourceCount)));
+    return s;
+  };
+  return stream.pipeThrough(
+    new TransformStream<T, T>({
+      transform(chunk, controller) {
+        if (chunk.type === "text-delta" && typeof chunk.id === "string" && typeof chunk.delta === "string") {
+          const out = forId(chunk.id).push(chunk.delta);
+          if (out) controller.enqueue({ ...chunk, delta: out });
+          return;
+        }
+        if (chunk.type === "text-end" && typeof chunk.id === "string") {
+          const tail = forId(chunk.id).flush();
+          strippers.delete(chunk.id);
+          if (tail) controller.enqueue({ type: "text-delta", id: chunk.id, delta: tail } as unknown as T);
+        }
+        controller.enqueue(chunk);
       },
     }),
   );

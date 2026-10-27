@@ -69,13 +69,14 @@ export type ConfigChange = {
 
 const FIRST_PUBLISH = "İlk yayın";
 
-const SCALARS: { key: "historyWindow" | "maxMessagesPerDay" | "photosEnabled" | "maxPhotoMb" | "retrievalTopK" | "retrievalMinSimilarity"; label: string }[] = [
+const SCALARS: { key: "historyWindow" | "maxMessagesPerDay" | "photosEnabled" | "maxPhotoMb" | "retrievalTopK" | "retrievalMinSimilarity" | "retrievalPerSourceMax"; label: string }[] = [
   { key: "historyWindow", label: "Modele giden son mesaj sayısı" },
   { key: "maxMessagesPerDay", label: "Günlük mesaj sınırı" },
   { key: "photosEnabled", label: "Fotoğraf yükleme" },
   { key: "maxPhotoMb", label: "Azami fotoğraf boyutu (MB)" },
   { key: "retrievalTopK", label: "Bilgi tabanından alınan parça sayısı" },
   { key: "retrievalMinSimilarity", label: "İlgililik eşiği" },
+  { key: "retrievalPerSourceMax", label: "Kaynak başına en çok parça" },
 ];
 
 const show = (v: unknown): string => (typeof v === "boolean" ? (v ? "açık" : "kapalı") : String(v));

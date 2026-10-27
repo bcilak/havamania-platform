@@ -15,7 +15,18 @@ function niceMax(v: number): number {
   return 10 * exp;
 }
 
-export function DailyColumns({ data, unit = "konuşma" }: { data: { day: string; label: string; value: number }[]; unit?: string }) {
+export function DailyColumns({
+  data,
+  unit = "konuşma",
+  format = fmtInt,
+  ariaLabel,
+}: {
+  data: { day: string; label: string; value: number }[];
+  unit?: string;
+  /** Değer ve eksen etiketi biçimi (ör. yüzde). */
+  format?: (v: number) => string;
+  ariaLabel?: string;
+}) {
   const max = niceMax(Math.max(1, ...data.map((d) => d.value)));
   const ticks = [0, max / 2, max];
   const peak = data.reduce((best, d, i) => (d.value > data[best].value ? i : best), 0);
@@ -28,7 +39,7 @@ export function DailyColumns({ data, unit = "konuşma" }: { data: { day: string;
         <div className="tabular relative w-7 shrink-0 text-right text-[11px] text-faint" style={{ height: H }}>
           {ticks.map((t) => (
             <span key={t} className="absolute right-0 -translate-y-1/2" style={{ top: H - (t / max) * H }}>
-              {fmtInt(t)}
+              {format(t)}
             </span>
           ))}
         </div>
@@ -36,11 +47,11 @@ export function DailyColumns({ data, unit = "konuşma" }: { data: { day: string;
           {ticks.map((t) => (
             <div key={t} className="absolute inset-x-0 h-px bg-line" style={{ top: H - (t / max) * H }} aria-hidden />
           ))}
-          <ol className="relative flex h-full items-end" aria-label={`Günlük ${unit} sayısı`}>
+          <ol className="relative flex h-full items-end" aria-label={ariaLabel ?? `Günlük ${unit} sayısı`}>
             {data.map((d, i) => {
               const h = (d.value / max) * H;
               return (
-                <li key={d.day} className="group relative flex h-full flex-1 items-end justify-center" tabIndex={0} aria-label={`${d.label}: ${d.value} ${unit}`}>
+                <li key={d.day} className="group relative flex h-full flex-1 items-end justify-center" tabIndex={0} aria-label={`${d.label}: ${format(d.value)} ${unit}`.trim()}>
                   {/* geniş, görünmez hedef alanı */}
                   <span className="absolute inset-0" aria-hidden />
                   <span
@@ -49,7 +60,7 @@ export function DailyColumns({ data, unit = "konuşma" }: { data: { day: string;
                   />
                   {i === peak && d.value > 0 && (
                     <span className="tabular absolute text-[11px] font-medium text-ink" style={{ bottom: h + 4 }}>
-                      {d.value}
+                      {format(d.value)}
                     </span>
                   )}
                   <span
@@ -58,7 +69,7 @@ export function DailyColumns({ data, unit = "konuşma" }: { data: { day: string;
                   >
                     <span className="block text-muted">{d.label}</span>
                     <span className="tabular font-semibold">
-                      {fmtInt(d.value)} {unit}
+                      {format(d.value)} {unit}
                     </span>
                   </span>
                 </li>
@@ -81,7 +92,7 @@ export function DailyColumns({ data, unit = "konuşma" }: { data: { day: string;
             {data.map((d) => (
               <tr key={d.day} className="border-t border-line">
                 <td className="py-1 text-muted">{d.label}</td>
-                <td className="tabular py-1 text-right">{d.value}</td>
+                <td className="tabular py-1 text-right">{format(d.value)}</td>
               </tr>
             ))}
           </tbody>

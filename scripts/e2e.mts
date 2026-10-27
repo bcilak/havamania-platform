@@ -34,6 +34,9 @@ if (cmd === "setup") {
       apiKeyEnc: encrypt("mock"),
       baseUrl: "http://localhost:3199/v1",
       models: [{ id: "mock-1", label: "Sahte model", vision: true, tools: true, inputPer1M: 1, outputPer1M: 5 }],
+      // Embedding maliyeti kaydı (smoke:chat): 1M token = 2 USD.
+      embeddingModels: ["mock-embed"],
+      embeddingPrices: { "mock-embed": 2 },
     })
     .returning();
   const cfg = normalizeBotConfig(bot.draftConfig);
@@ -56,6 +59,21 @@ if (cmd === "setup") {
     })
     .returning();
   await processSource(kb.id);
+  // Kısaltma araması (smoke:chat): "FQ" 2 harfli büyük harfli kısaltmadır; önek aramasında düşerdi.
+  const [kbAbbr] = await db
+    .insert(kbSources)
+    .values({
+      botId: bot.id,
+      type: "qa",
+      mode: "all",
+      title: "E2E kısaltma",
+      question: "FQ kısaltması ne demek?",
+      answer: "FQ, E2E testindeki uydurma bir kısaltmadır ve sıklık anlamına gelir.",
+      priority: 5,
+      createdBy: "e2e",
+    })
+    .returning();
+  await processSource(kbAbbr.id);
   const v = await publishDraft({ ...bot, draftConfig: cfg }, "e2e", "E2E testi");
   const prevIntegration = (integration?.value ?? {}) as Record<string, unknown>;
   await db
@@ -69,7 +87,7 @@ if (cmd === "setup") {
   await db.update(bots).set({ draftConfig: snap.draftConfig, publishedVersionId: snap.publishedVersionId, allowAnonymous: snap.allowAnonymous }).where(eq(bots.id, bot.id));
   const extra = await db.select({ id: botVersions.id }).from(botVersions).where(eq(botVersions.publishedBy, "e2e"));
   if (extra.length) await db.delete(botVersions).where(inArray(botVersions.id, extra.map((x) => x.id)));
-  await db.delete(kbSources).where(and(eq(kbSources.botId, bot.id), eq(kbSources.createdBy, "e2e"), eq(kbSources.title, "E2E SSS")));
+  await db.delete(kbSources).where(and(eq(kbSources.botId, bot.id), eq(kbSources.createdBy, "e2e"), inArray(kbSources.title, ["E2E SSS", "E2E kısaltma"])));
   if (snap.embedding) await db.update(settings).set({ value: snap.embedding }).where(eq(settings.key, "embedding"));
   else await db.delete(settings).where(eq(settings.key, "embedding"));
   await db.delete(providers).where(eq(providers.name, "E2E sahte model"));

@@ -111,6 +111,9 @@ export default async function PersonaPage({ searchParams }: { searchParams: Sear
               <Field label="Bilgi tabanından alınan parça" htmlFor="retrievalTopK">
                 <input id="retrievalTopK" name="retrievalTopK" type="number" min={1} max={15} defaultValue={draft.retrievalTopK} className={inputCls} />
               </Field>
+              <Field label="Kaynak başına en çok parça" htmlFor="retrievalPerSourceMax" hint="Aynı kaynaktan asistana verilecek parça üst sınırı (1–10). Komşu parçalar birleştirilir, aynı metinli parçalar teke indirilir.">
+                <input id="retrievalPerSourceMax" name="retrievalPerSourceMax" type="number" min={1} max={10} defaultValue={draft.retrievalPerSourceMax} className={inputCls} />
+              </Field>
               <Field
                 label="En düşük benzerlik"
                 htmlFor="retrievalMinSimilarity"

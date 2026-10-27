@@ -15,7 +15,7 @@ import { getMainBot, getPublishedVersion } from "@/lib/bot";
 import { purgeSummary } from "@/lib/kb";
 import { MODES, MODE_META } from "@/lib/bot-config";
 import { param, type SearchParams } from "@/lib/form";
-import { fmtInt, fmtRelative } from "@/lib/format";
+import { fmtInt, fmtRelative, fmtUsd } from "@/lib/format";
 import { LIST_PAGE_SIZE, pageInfo, parsePage } from "@/lib/pagination";
 import { getSetting } from "@/lib/settings";
 import { addQa, addUrl, deleteSource, importCms, purge, reprocess, uploadSource } from "./actions";
@@ -97,6 +97,10 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
   const liveEmbedding = effectiveEmbedding(published?.embedding, embedding);
   const liveEmbeddingChanged = Boolean(published) && !sameEmbedding(liveEmbedding, embedding);
   const [{ chunks }] = await db.select({ chunks: sql<number>`count(*)::int` }).from(sql`kb_chunks`).where(sql`bot_id = ${bot.id}`);
+  const [{ embTokens, embCost }] = await db
+    .select({ embTokens: sql<number>`coalesce(sum(${kbSources.embeddingTokens}), 0)::int`, embCost: sql<number>`coalesce(sum(${kbSources.embeddingCostUsd}), 0)::float` })
+    .from(kbSources)
+    .where(and(eq(kbSources.botId, bot.id), isNull(kbSources.supersededBy), isNull(kbSources.deletedAt)));
   const hits = query ? await searchKnowledge({ botId: bot.id, mode: queryMode, query, allowedSourceIds: null,
         topK: 6,
         minSimilarity: bot.draftConfig.retrievalMinSimilarity,
@@ -128,9 +132,16 @@ export default async function KnowledgePage({ searchParams }: { searchParams: Se
       )}
 
       <div className="mb-5">
+        <Notice>
+          Parçalama iyileştirildi: parçalar artık cümle sınırından bölünüyor, başlık yolu (&quot;Bölüm: …&quot;) ekleniyor ve DOCX tabloları okunuyor. Daha önce eklenen
+          dosya ve adres kaynaklarını yeniden işlerseniz bu iyileştirmeden yararlanır; kendiliğinden yeniden işlenmezler.
+        </Notice>
+      </div>
+
+      <div className="mb-5">
         {embedding.providerId && embedding.model ? (
           <Notice>
-            Taslakta arama <strong>vektör + Türkçe tam metin</strong> ile yapılıyor ({embedding.model}). Toplam {fmtInt(chunks)} parça.
+            Taslakta arama <strong>vektör + Türkçe tam metin</strong> ile yapılıyor ({embedding.model}). Toplam {fmtInt(chunks)} parça. Vektörleme: {fmtInt(embTokens)} token{embCost > 0 ? ` · ${fmtUsd(embCost)}` : ""} (fiyat Modeller sayfasından girilir).
             {liveEmbeddingChanged && (
               <>
                 {" "}

@@ -6,6 +6,7 @@ import { after } from "next/server";
 import { db } from "@/db";
 import { providers, type ProviderKind, type ProviderModel } from "@/db/schema";
 import { reindexAll } from "@/lib/ai/ingest";
+import { MAX_EMBEDDING_PRICE_PER_1M, parseEmbeddingLines } from "@/lib/ai/embedding-cost";
 import { KEEP_VERSIONS } from "@/lib/ai/kb-lifecycle";
 import { PROVIDER_KINDS, testModel } from "@/lib/ai/providers";
 import { audit } from "@/lib/audit";
@@ -59,10 +60,9 @@ export async function updateProvider(fd: FormData) {
       inputPer1M: Math.max(0, Number(String(r.inputPer1M ?? "0").replace(",", ".")) || 0),
       outputPer1M: Math.max(0, Number(String(r.outputPer1M ?? "0").replace(",", ".")) || 0),
     }));
-  const embeddingModels = str(fd, "embeddingModels", 1000)
-    .split(/[\n,]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Satır: "<model>" ya da "<model> <1M token için USD>" (vektörleme ve arama maliyeti için).
+  const { models: embeddingModels, prices: embeddingPrices, tooHigh } = parseEmbeddingLines(str(fd, "embeddingModels", 1000));
+  if (tooHigh.length) fail(`${BACK}#p-${id}`, `Embedding fiyatı 1M token için en fazla ${MAX_EMBEDDING_PRICE_PER_1M} USD olabilir (${tooHigh.join(", ")}). Fiyatı kontrol edin.`);
   const apiKey = str(fd, "apiKey", 500);
   await db
     .update(providers)
@@ -71,10 +71,16 @@ export async function updateProvider(fd: FormData) {
       baseUrl: str(fd, "baseUrl", 500) || null,
       models,
       embeddingModels,
+      embeddingPrices,
       ...(apiKey ? { apiKeyEnc: encrypt(apiKey) } : {}),
     })
     .where(eq(providers.id, id));
-  await audit(admin, "provider.update", id, { models: models.length, keyChanged: Boolean(apiKey) });
+  await audit(admin, "provider.update", id, {
+    models: models.length,
+    keyChanged: Boolean(apiKey),
+    // Embedding fiyatı değişimi maliyet raporlarını etkiler: eski ve yeni değer denetim kaydında.
+    ...(JSON.stringify(p!.embeddingPrices ?? {}) !== JSON.stringify(embeddingPrices) ? { embeddingPricesOld: p!.embeddingPrices ?? {}, embeddingPricesNew: embeddingPrices } : {}),
+  });
   revalidatePath(BACK);
   done(`${BACK}#p-${id}`, "Kaydedildi.");
 }

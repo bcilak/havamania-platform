@@ -8,6 +8,7 @@ import { requireAdmin } from "@/lib/auth";
 import { MODES, MODE_META } from "@/lib/bot-config";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtInt, fmtRelative, fmtUsd, maskId, PLATFORM_LABEL } from "@/lib/format";
+import { maskPii, piiText } from "@/lib/pii-mask";
 import { can } from "@/lib/roles";
 
 export const metadata = { title: "Konuşmalar" };
@@ -16,13 +17,19 @@ const PAGE = 40;
 export default async function ConversationsPage({ searchParams }: { searchParams: SearchParams }) {
   const admin = await requireAdmin("conversations");
   const sp = await searchParams;
-  const q = param(sp, "q");
+  const pii = can(admin.role, "pii");
+  const rawQ = param(sp, "q");
+  // Kişisel veri görmeyen rol telefon/e-posta/koordinat deseniyle arayarak mesajlarda kişisel veri sorgulayamaz:
+  // desen kontrolüne ek olarak, harf/rakam dışı karakterler atılınca 3'ten uzun rakam dizisi ya da "@" içeren sorgu engellenir.
+  const searchBlocked = !pii && (maskPii(rawQ) !== rawQ || /\d{4,}/.test(rawQ.replace(/[^\p{L}\p{N}]/gu, "")) || rawQ.includes("@"));
+  const q = searchBlocked ? "" : rawQ;
+  // ILIKE jokerleri (\ % _) her rol için kaçışlanır; "_" ile hane hane çıkarım yapılamaz (PostgreSQL varsayılan kaçış karakteri \).
+  const like = `%${q.replace(/[\\%_]/g, "\\$&")}%`;
   const mode = param(sp, "mod") as ChatMode | "";
   const platform = param(sp, "platform") as Platform | "";
   const state = param(sp, "durum");
   const range = param(sp, "aralik") || "30";
   const page = Math.max(1, Number(param(sp, "sayfa")) || 1);
-  const pii = can(admin.role, "pii");
 
   const where: SQL[] = [];
   if (platform) where.push(eq(conversations.platform, platform));
@@ -34,11 +41,13 @@ export default async function ConversationsPage({ searchParams }: { searchParams
   if (state === "fotografli") where.push(gt(conversations.photoCount, 0));
   if (state === "cevapsiz")
     where.push(inArray(conversations.id, db.select({ id: messages.conversationId }).from(messages).where(eq(messages.unanswered, true))));
+  // Engellenen arama filtresiz tüm listeyi döndürmez; sonuç boş kalır (arama kutusu da boş basılır).
+  if (searchBlocked) where.push(sql`false`);
   if (q) {
     where.push(
       or(
-        ilike(conversations.title, `%${q}%`),
-        inArray(conversations.id, db.select({ id: messages.conversationId }).from(messages).where(ilike(messages.content, `%${q}%`))),
+        ilike(conversations.title, like),
+        inArray(conversations.id, db.select({ id: messages.conversationId }).from(messages).where(ilike(messages.content, like))),
       )!,
     );
   }
@@ -65,6 +74,11 @@ export default async function ConversationsPage({ searchParams }: { searchParams
     <>
       <PageHeader title="Konuşmalar" description="Mobil uygulama ve web üzerinden asistanla yapılan tüm yazışmalar." />
       <Flash sp={sp} />
+      {searchBlocked && (
+        <p className="mb-3 rounded-lg bg-warn-soft px-3 py-2 text-sm" role="status">
+          Rolünüz gereği telefon, e-posta, numara ve konum içeren aramalar yapılamaz.
+        </p>
+      )}
 
       <form className="mb-4 flex flex-wrap items-end gap-2" role="search">
         <input name="q" defaultValue={q} placeholder="Mesajlarda ara…" aria-label="Ara" className={`${inputCls} w-full sm:w-64`} />
@@ -123,7 +137,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
                 <tr key={c.id} className="hover:bg-sunken/60">
                   <td className={td}>
                     <Link href={`/admin/konusmalar/${c.id}`} className="font-medium hover:text-accent">
-                      {c.title || "Başlıksız"}
+                      {c.title ? piiText(pii, c.title) : "Başlıksız"}
                     </Link>
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       {c.isDemo && <Badge>Örnek</Badge>}
@@ -178,8 +192,8 @@ export default async function ConversationsPage({ searchParams }: { searchParams
         </>
       ) : (
         <div className="rounded-xl border border-line bg-surface">
-          <EmptyState icon={MessagesSquare} title={q || mode || platform || state ? "Filtreye uyan konuşma yok" : "Henüz konuşma yok"}>
-            {q || mode || platform || state
+          <EmptyState icon={MessagesSquare} title={searchBlocked || q || mode || platform || state ? "Filtreye uyan konuşma yok" : "Henüz konuşma yok"}>
+            {searchBlocked || q || mode || platform || state
               ? "Filtreleri değiştirmeyi ya da tarih aralığını genişletmeyi deneyin."
               : "Asistan uygulamaya gömüldüğünde konuşmalar burada listelenecek. Bu arada Test alanında deneyebilirsiniz."}
           </EmptyState>
