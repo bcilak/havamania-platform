@@ -37,6 +37,8 @@ export const AUDIT_LABELS: Record<string, string> = {
   "bot.version_note": "Sürüm notunu düzenledi",
   "bot.embed": "Gömme ayarlarını değiştirdi",
   "bot.token_secret": "Kullanıcı token anahtarını yeniledi",
+  "bridge.key_create": "Köprü anahtarı oluşturdu",
+  "bridge.key_revoke": "Köprü anahtarını iptal etti",
   "kb.create": "Bilgi tabanına kaynak ekledi",
   "kb.delete": "Bilgi tabanından kaynak sildi",
   "kb.update": "Bilgi tabanı kaynağını düzenledi",
@@ -61,5 +63,6 @@ export const AUDIT_LABELS: Record<string, string> = {
   "kvkk.update": "KVKK ayarlarını değiştirdi",
   "kvkk.delete_user": "Silme talebini işledi",
   "kvkk.cleanup": "Saklama süresi temizliğini çalıştırdı",
+  "legal.update": "Yasal sayfaları güncelledi",
   "demo.delete": "Örnek verileri sildi",
 };

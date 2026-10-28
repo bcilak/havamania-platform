@@ -2,9 +2,10 @@
 
 Tek bir Next.js uygulaması üç işi yapar:
 
-- **Site** (`/`): Havamania landing sayfası, içeriği CMS'ten gelir. Yasal sayfalar: `/gizlilik`, `/kullanim-kosullari`, `/hesap-silme` (eski `/privacy`, `/terms`, `/delete-account` adresleri bunlara yönlenir).
+- **Site** (`/`): Havamania landing sayfası, içeriği CMS'ten gelir. Yasal sayfalar: `/gizlilik`, `/kullanim-kosullari`, `/hesap-silme`, `/kvkk` (KVKK m. 10 aydınlatma metni; eski `/privacy`, `/terms`, `/delete-account` adresleri bunlara yönlenir).
 - **Admin paneli** (`/admin`): CMS, asistan konuşmaları, fotoğraflar, geri bildirim, bot eğitimi, yayın ve gömme, modeller, KVKK.
 - **Sohbet** (`/w/{bot anahtarı}` ve `/api/chat`): mobil uygulamanın WebView'da, web sitelerinin `widget.js` ile açtığı asistan.
+- **Mobil backend köprüsü** (`/api/bridge/{ask,consent,delete-user,feedback}`): mobil uygulamanın backend'i (FastAPI) asistanla kullanıcı adına sunucudan sunucuya konuşur. Panelde üretilen bota bağlı sunucu anahtarıyla (`Authorization: Bearer hm_bk_…`) kimlik doğrular. Sağlık hassasiyetleri için ayrı, isteğe bağlı rıza vardır: `GET /consent` yanıtındaki `health {version, text}` metni gösterilir, `/ask` isteğine `health_consent: true` ve `health_consent_version` eklenir; ikisi de yoksa `profile.health_sensitivities` modele gönderilmez (hata verilmez). Metin panelde KVKK ayarlarından düzenlenir.
 
 ## Kurulum
 
@@ -37,11 +38,11 @@ Bu makinedeki Windows Uygulama Denetimi ilkesi Next.js'in native SWC dosyasını
 | `npm run dev`           | Geliştirme sunucusu (3110)                                                  |
 | `npm run build` / `start` | Üretim derlemesi ve sunucusu                                             |
 | `npm run setup`         | `db:up` + `db:init` (pgvector) + `db:push` (şema) + `db:seed`              |
-| `npm run smoke`         | Çalışan sunucuya karşı duman testi: tüm admin sayfaları, widget akışı, yetkiler, yasal sayfalar |
-| `npm run smoke:actions` | Veri değiştiren işlemler: CMS kaydet/yayınla, SSS ekle, yayınla/geri al. Sonunda her şeyi eski hâline döndürür |
+| `npm run smoke`         | Çalışan sunucuya karşı duman testi: tüm admin sayfaları, widget akışı, yetkiler, yasal sayfalar (`/kvkk` dahil), köprü kimliği ve doğrulama |
+| `npm run smoke:actions` | Veri değiştiren işlemler: CMS kaydet/yayınla, SSS ekle, yayınla/geri al, köprü anahtarı üret/iptal et. Sonunda her şeyi eski hâline döndürür |
 | `npm run mock`          | Sahte model (OpenAI uyumlu, araç çağırma dahil) + sahte Havamania veri API'si, port 3199. Anahtarsız geliştirme için |
 | `npm run e2e -- setup`  | Botu sahte servislere bağlar ve yayınlar; önce durumun anlık görüntüsünü alır |
-| `npm run smoke:chat`    | Sohbetin uçtan uca testi (12 kontrol): akış, araçlar, kayıt, gizlilik, Durdur, hız sınırı. `mock` + `e2e -- setup` gerekir |
+| `npm run smoke:chat`    | Sohbetin uçtan uca testi: akış, araçlar, kayıt, gizlilik, Durdur, hız sınırı ve köprü (`/ask`, `model_error`, geri bildirim, silme, KVKK kilit yarışı). `mock` + `e2e -- setup` gerekir. Köprü zaman aşımı (504) kontrolü için sunucuyu `BRIDGE_TIMEOUT_MS=5000` ile başlatın |
 | `npm run e2e -- teardown` | Her şeyi `setup` öncesine döndürür                                        |
 | `npm run typecheck`     | TypeScript kontrolü                                                         |
 
@@ -80,7 +81,9 @@ Panel bunların hepsi olmadan açılır ve çalışır; Pano'daki "Kurulum" list
 6. **KVKK aydınlatma metni** (Yönetim › KVKK): hukuk onayından geçmeli. Mesajlar yurt dışındaki yapay zekâ sağlayıcılarına gittiği için yurt dışına aktarım sayılır.
 7. **Zamanlanmış temizlik**: `.env.local`'e `CRON_SECRET` ekleyin ve günde bir kez `POST /api/cron/kvkk` (`Authorization: Bearer $CRON_SECRET`) çağırın.
 8. **Yasal sayfalar** (İçerik › Yasal sayfalar): şirket unvanı, iletişim e-postası, sunucu konumu ve metinler. Google Play'e gizlilik politikası ve hesap silme adresi olarak buradaki bağlantılar verilir. Metinler uygulamanın topladığı verilerle ve Play Console'daki Veri güvenliği formuyla uyuşmalı; hukuk onayından geçmeli. Politikada asistan verilerinin saklama süresi sonunda silindiği yazar: 7. maddedeki zamanlanmış temizliği açmadan mağazaya göndermeyin.
-9. **Canlı ortam**: `APP_URL`, S3/R2 deposu (`STORAGE_DRIVER=s3`), güçlü `ADMIN_PASSWORD`, HTTPS.
+9. **Mobil backend köprüsü** (Yayın › Gömme › Köprü anahtarları, yalnızca süper yönetici): anahtar bir kez gösterilir, veritabanında yalnızca SHA-256 özeti tutulur. En çok 2 etkin anahtar vardır (rotasyon): önce yeni anahtarı oluşturup backend'e girin, sonra eskisini iptal edin (iptal en geç 30 sn içinde etkinleşir). Ortam değişkenleri (hepsi isteğe bağlı, `.env*` dosyalarına yazılmasa da olur): `BRIDGE_TIMEOUT_MS` (43000, model bütçesi), `RATE_LIMIT_BRIDGE_PER_USER_PER_MIN` (8), `RATE_LIMIT_BRIDGE_PER_KEY_PER_MIN` (120), `RATE_LIMIT_BRIDGE_CONCURRENCY` (16, anahtar başına aynı anda çalışan /ask; `RATE_LIMIT_BRIDGE_QUEUE` 32 bekleyen, `RATE_LIMIT_BRIDGE_QUEUE_WAIT_MS` 10000; dolunca 429 `rate_limited` + `Retry-After`), `BRIDGE_DAILY_MESSAGES_PER_BOT` (5000, bot başına günlük köprü mesajı tavanı; kalıcı `bridge_usage` sayacından sayılır, konuşma silmeyle sıfırlanmaz; dolunca 429 `daily_limit`), `RATE_LIMIT_BRIDGE_AUTH_FAIL_PER_MIN` (20, IP başına). Paneldeki günlük mesaj sınırı köprüye de maliyet tavanı olarak uygulanır; mobil premium kotasından yüksek tutun.
+10. **Yeni onay metni ve yasal metinler**: `/admin/yasal` sayfasında kayıtlı metni varsayılandan farklı olan her sayfa için uyarı çıkar; yeni gizlilik, hesap silme ve KVKK metinlerini almak için "varsayılana döndür"ü işaretleyin. Kayıtlı bir `kvkk` ayarı varsa yeni onay metnini Yönetim › KVKK'dan girin (sürüm artar; widget ve mobil uygulama yeniden onay ister).
+11. **Canlı ortam**: `APP_URL`, S3/R2 deposu (`STORAGE_DRIVER=s3`), güçlü `ADMIN_PASSWORD`, HTTPS.
 
 ## Mobil gömme
 

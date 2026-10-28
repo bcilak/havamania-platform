@@ -2,11 +2,13 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   customType,
+  date,
   index,
   integer,
   jsonb,
   numeric,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -206,6 +208,49 @@ export const botVersions = pgTable(
   (t) => [uniqueIndex("bot_versions_bot_number_idx").on(t.botId, t.number)],
 );
 
+/**
+ * Mobil backend (sunucudan sunucuya) köprüsünün anahtarları. Anahtarın kendisi saklanmaz,
+ * yalnızca SHA-256 özeti tutulur; düz metin yalnızca oluşturulduğu anda bir kez gösterilir.
+ * İptal edilen anahtar silinmez (`revokedAt`), denetim izi korunur.
+ */
+export const bridgeKeys = pgTable(
+  "bridge_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    botId: uuid("bot_id")
+      .references(() => bots.id, { onDelete: "cascade" })
+      .notNull(),
+    name: text("name").notNull(),
+    /** SHA-256 (hex) */
+    keyHash: text("key_hash").notNull().unique(),
+    /** Anahtarın son 4 karakteri; listede tanımak için. */
+    hint: text("hint").notNull(),
+    createdBy: text("created_by"),
+    createdAt: created(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokedBy: text("revoked_by"),
+  },
+  (t) => [index("bridge_keys_bot_idx").on(t.botId)],
+);
+
+/**
+ * Köprü günlük mesaj sayacı (maliyet tavanı): bot ve gün (Europe/Istanbul takvim günü) başına bir satır.
+ * Konuşma/mesaj tablolarından bağımsızdır: /delete-user ve saklama temizliği sayacı sıfırlayamaz. Kişisel veri
+ * içermez (kullanıcı kimliği yok), yalnızca sayı tutar. Bot silinirse cascade ile gider.
+ */
+export const bridgeUsage = pgTable(
+  "bridge_usage",
+  {
+    botId: uuid("bot_id")
+      .references(() => bots.id, { onDelete: "cascade" })
+      .notNull(),
+    day: date("day").notNull(),
+    messages: integer("messages").default(0).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.botId, t.day] })],
+);
+
 /* ---------- Bilgi tabanı ---------- */
 
 export const kbSources = pgTable(
@@ -345,6 +390,9 @@ export const conversations = pgTable(
     outputTokens: integer("output_tokens").default(0).notNull(),
     costUsd: numeric("cost_usd", { precision: 12, scale: 6, mode: "number" }).default(0).notNull(),
     isDemo: boolean("is_demo").default(false).notNull(),
+    // Sağlık hassasiyetleri (KVKK m. 6) bu konuşmada gerçekten prompt'a girdiyse true; cevaplar bu bilgiye dayanabilir.
+    // pii yetkisi olmayan roller bu konuşmanın içeriğini görmez; eval/düzeltme kopyası alınamaz. Bir kez true olunca geri dönmez.
+    healthContext: boolean("health_context").default(false).notNull(),
     anonymizedAt: timestamp("anonymized_at", { withTimezone: true }),
     startedAt: created(),
     lastMessageAt: timestamp("last_message_at", { withTimezone: true }).defaultNow().notNull(),

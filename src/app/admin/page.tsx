@@ -12,7 +12,7 @@ import { MODES, MODE_META, TOOLS } from "@/lib/bot-config";
 import type { SearchParams } from "@/lib/form";
 import { fmtInt, fmtRelative, fmtUsd, PLATFORM_LABEL, truncate } from "@/lib/format";
 import { groupGaps } from "@/lib/gaps";
-import { maskPii, piiText } from "@/lib/pii-mask";
+import { HEALTH_RESTRICTED_NOTICE, healthRestricted, maskPii, piiText } from "@/lib/pii-mask";
 import { can } from "@/lib/roles";
 import { getSetting } from "@/lib/settings";
 import { breakdown, dailyConversations, gapQuestions, periodStats, toolCounts, versionCounts, weeklyQuality } from "@/lib/stats";
@@ -80,9 +80,10 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
     breakdown(7),
     db.select().from(conversations).where(ne(conversations.platform, "playground")).orderBy(desc(conversations.lastMessageAt)).limit(6),
     db
-      .select({ id: feedback.id, messageId: feedback.messageId, conversationId: feedback.conversationId, comment: feedback.comment, createdAt: feedback.createdAt, content: messages.content })
+      .select({ id: feedback.id, messageId: feedback.messageId, conversationId: feedback.conversationId, comment: feedback.comment, createdAt: feedback.createdAt, content: messages.content, healthContext: conversations.healthContext })
       .from(feedback)
       .innerJoin(messages, eq(messages.id, feedback.messageId))
+      .innerJoin(conversations, eq(conversations.id, feedback.conversationId))
       .where(and(eq(feedback.status, "open"), eq(feedback.rating, -1)))
       .orderBy(desc(feedback.createdAt))
       .limit(5),
@@ -264,7 +265,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
               {recent.map((c) => (
                 <li key={c.id}>
                   <Link href={`/admin/konusmalar/${c.id}`} className="block px-5 py-3 hover:bg-sunken">
-                    <div className="truncate text-sm font-medium">{c.title ? piiText(showPii, c.title) : "Başlıksız"}</div>
+                    <div className="truncate text-sm font-medium">{healthRestricted(showPii, c.healthContext) ? HEALTH_RESTRICTED_NOTICE : c.title ? piiText(showPii, c.title) : "Başlıksız"}</div>
                     <div className="mt-1 flex items-center gap-2 text-xs text-muted">
                       <ModeBadge mode={c.mode} />
                       <span>·</span>
@@ -296,7 +297,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Search
               {openFb.map((f) => (
                 <li key={f.id}>
                   <Link href={`/admin/konusmalar/${f.conversationId}#m-${f.messageId}`} className="block px-5 py-3 hover:bg-sunken">
-                    <div className="line-clamp-2 text-sm">{f.comment ? `“${piiText(showPii, f.comment)}”` : truncate(piiText(showPii, f.content), 110)}</div>
+                    <div className="line-clamp-2 text-sm">{healthRestricted(showPii, f.healthContext) ? HEALTH_RESTRICTED_NOTICE : f.comment ? `“${piiText(showPii, f.comment)}”` : truncate(piiText(showPii, f.content), 110)}</div>
                     <div className="mt-1 text-xs text-muted">{fmtRelative(f.createdAt)}</div>
                   </Link>
                 </li>

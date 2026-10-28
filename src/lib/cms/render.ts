@@ -327,6 +327,7 @@ ${scene("fly", c.scenes.fly)}
   </div>
   <p style="font-size:clamp(12px,2.6vw,13px);color:${INK_MUTED};max-width:52ch;margin:0 auto 6px;text-wrap:pretty">${e(c.footer.tagline)}</p>
   <nav aria-label="Yasal" style="display:flex;justify-content:center;flex-wrap:wrap;gap:6px 18px;margin-top:14px;font-size:12px">
+    <a href="/kvkk" style="color:${INK_MUTED}">KVKK Aydınlatma Metni</a>
     <a href="/gizlilik" style="color:${INK_MUTED}">Gizlilik Politikası</a>
     <a href="/kullanim-kosullari" style="color:${INK_MUTED}">Kullanım Koşulları</a>
     <a href="/hesap-silme" style="color:${INK_MUTED}">Hesap Silme</a>

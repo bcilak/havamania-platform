@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Markdown } from "@/components/chat/Markdown";
 import { fillLegal, formatLegalDate, LEGAL_PAGES, type LegalSlug } from "@/lib/legal";
+import { aiProviderList } from "@/lib/legal-providers";
 import { getSetting } from "@/lib/settings";
 
 const siteUrl = () => (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
@@ -21,7 +22,9 @@ export function legalMetadata(slug: LegalSlug): Metadata {
 export async function LegalPage({ slug }: { slug: LegalSlug }) {
   const page = LEGAL_PAGES[slug];
   const [cfg, kvkk] = await Promise.all([getSetting("legal"), getSetting("kvkk")]);
-  const body = fillLegal(cfg[slug], cfg, { retentionDays: kvkk.retentionDays, siteUrl: siteUrl() });
+  // Sağlayıcı listesi yalnızca metin yer tutucuyu kullanıyorsa sorgulanır.
+  const aiProviders = cfg[slug].includes("{{yz_saglayicilar}}") ? await aiProviderList() : undefined;
+  const body = fillLegal(cfg[slug], cfg, { retentionDays: kvkk.retentionDays, siteUrl: siteUrl(), aiProviders });
 
   return (
     <div className="min-h-dvh bg-ground text-ink">

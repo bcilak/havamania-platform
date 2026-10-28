@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
+import { usesToken } from "@/lib/consent";
 import { bool, done, fail, str } from "@/lib/form";
 import { LEGAL_BODY_DEFAULTS, LEGAL_PAGES, type LegalSlug } from "@/lib/legal";
 import { getSetting, setSetting } from "@/lib/settings";
@@ -42,7 +43,35 @@ export async function saveLegal(fd: FormData) {
 
   await setSetting("legal", next);
   await audit(admin, "legal.update", null, { changed, reset });
+
+  // Onay metni {{sirket}} içeriyorsa şirket adı kullanıcıya gösterilen metni değiştirir: sürüm artar, herkes yeniden onaylar.
+  // Aynısı ayrı sağlık rızası metni için de geçerlidir (kendi sürümü artar).
+  let consentBumped = false;
+  if (next.company !== prev.company) {
+    const kvkk = await getSetting("kvkk");
+    const main = usesToken(kvkk.consentText, "{{sirket}}");
+    const health = usesToken(kvkk.healthConsentText, "{{sirket}}");
+    if (main || health) {
+      const consentVersion = main ? kvkk.consentVersion + 1 : kvkk.consentVersion;
+      const healthConsentVersion = health ? kvkk.healthConsentVersion + 1 : kvkk.healthConsentVersion;
+      await setSetting("kvkk", {
+        ...kvkk,
+        consentVersion,
+        healthConsentVersion,
+        consentUpdatedAt: main ? new Date().toISOString() : kvkk.consentUpdatedAt,
+      });
+      await audit(admin, "kvkk.update", null, { consentVersion, healthConsentVersion, reason: "company" });
+      revalidatePath("/admin/ayarlar/kvkk");
+      consentBumped = true;
+    }
+  }
+
   for (const slug of SLUGS) revalidatePath(LEGAL_PAGES[slug].path);
   revalidatePath(BACK);
-  done(BACK, `Kaydedildi ve yayınlandı. Son güncelleme tarihi bugün olarak değişti.`);
+  done(
+    BACK,
+    consentBumped
+      ? "Kaydedildi ve yayınlandı. Şirket adı açık rıza metninde de geçtiği için onay sürümü arttı; kullanıcılar yeniden onay verecek."
+      : "Kaydedildi ve yayınlandı. Son güncelleme tarihi bugün olarak değişti.",
+  );
 }

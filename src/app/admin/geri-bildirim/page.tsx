@@ -10,7 +10,7 @@ import { getMainBot } from "@/lib/bot";
 import { loadCorrectionStatus } from "@/lib/corrections";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtRelative } from "@/lib/format";
-import { piiText } from "@/lib/pii-mask";
+import { HEALTH_RESTRICTED_NOTICE, healthRestricted, piiText } from "@/lib/pii-mask";
 import { can } from "@/lib/roles";
 import { setFeedbackStatus } from "./actions";
 
@@ -31,6 +31,7 @@ export default async function FeedbackPage({ searchParams }: { searchParams: Sea
       answerAt: messages.createdAt,
       mode: conversations.mode,
       isDemo: conversations.isDemo,
+      healthContext: conversations.healthContext,
       question: sql<string | null>`(select u.content from messages u where u.conversation_id = ${messages.conversationId} and u.role = 'user' and u.created_at <= ${messages.createdAt} order by u.created_at desc limit 1)`,
     })
     .from(feedback)
@@ -79,7 +80,10 @@ export default async function FeedbackPage({ searchParams }: { searchParams: Sea
       />
       {rows.length ? (
         <ul className="grid gap-3">
-          {rows.map(({ f, answer, mode, question, isDemo }) => (
+          {rows.map(({ f, answer, mode, question, isDemo, healthContext }) => {
+            // Sağlık bilgisi içerebilen konuşmada pii yetkisi olmayan rol soru, cevap ve yorumu görmez.
+            const restricted = healthRestricted(pii, healthContext);
+            return (
             <li key={f.id} className="rounded-xl border border-line bg-surface p-4">
               <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted">
                 <ModeBadge mode={mode} />
@@ -102,16 +106,16 @@ export default async function FeedbackPage({ searchParams }: { searchParams: Sea
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
                   <div className="mb-1 text-xs font-medium text-muted">Kullanıcının sorusu</div>
-                  <p className="text-sm leading-relaxed">{question ? piiText(pii, question) : "(fotoğraf)"}</p>
+                  <p className="text-sm leading-relaxed">{restricted ? HEALTH_RESTRICTED_NOTICE : question ? piiText(pii, question) : "(fotoğraf)"}</p>
                 </div>
                 <div>
                   <div className="mb-1 text-xs font-medium text-muted">Asistanın cevabı</div>
-                  <p className="line-clamp-5 text-sm leading-relaxed">{piiText(pii, answer)}</p>
+                  <p className="line-clamp-5 text-sm leading-relaxed">{restricted ? HEALTH_RESTRICTED_NOTICE : piiText(pii, answer)}</p>
                 </div>
               </div>
-              {f.comment && <p className="mt-3 rounded-lg bg-sunken px-3 py-2 text-sm">“{piiText(pii, f.comment)}”</p>}
+              {f.comment && <p className="mt-3 rounded-lg bg-sunken px-3 py-2 text-sm">{restricted ? HEALTH_RESTRICTED_NOTICE : `“${piiText(pii, f.comment)}”`}</p>}
               <div className="mt-3 flex flex-wrap gap-2">
-                {canTrain && rating === -1 && status === "open" && (
+                {canTrain && !healthContext && rating === -1 && status === "open" && (
                   <Link href={`/admin/konusmalar/${f.conversationId}?duzelt=${f.messageId}#m-${f.messageId}`} className={btn("primary", "sm")}>
                     Düzelt
                   </Link>
@@ -150,7 +154,8 @@ export default async function FeedbackPage({ searchParams }: { searchParams: Sea
                 )}
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       ) : (
         <div className="rounded-xl border border-line bg-surface">

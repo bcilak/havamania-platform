@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SourceRecord, ToolCallRecord } from "@/db/schema";
-import { abortedContent, abortKind, abortedUsage, ChatError, describeError, describeEvalError, effectiveTarget, exposeTurnData, promptChars, redactErrorText } from "./turn-core";
+import { abortedContent, abortKind, abortedUsage, ChatError, dailyLimitRetryAfter, describeError, describeEvalError, effectiveTarget, exposeTurnData, isForeignKeyViolation, promptChars, redactErrorText } from "./turn-core";
 
 const tool: ToolCallRecord = { name: "current_weather", input: { location: "Bursa" }, output: { ok: true, data: { secret: 1 } } };
 const source = { sourceId: "s1", title: "SSS", snippet: "x", score: 1 } as SourceRecord;
@@ -99,5 +99,50 @@ describe("iptal/zaman aşımı kullanımı", () => {
     assert.equal(redactErrorText("Zaman aşımı (120 sn)"), "Zaman aşımı (120 sn)");
     assert.equal(redactErrorText("Invalid prompt: TC 12345678901"), "Model hatası");
     assert.equal(redactErrorText("Model hatası (HTTP 429) Ali Veli"), "Model hatası");
+  });
+});
+
+describe("ChatError", () => {
+  it("kod ve retryAfter taşır; yalnızca mesaj ve durumla kullanım geriye uyumludur", () => {
+    const e = new ChatError("x", 429, "daily_limit", 120);
+    assert.equal(e.message, "x");
+    assert.equal(e.status, 429);
+    assert.equal(e.code, "daily_limit");
+    assert.equal(e.retryAfter, 120);
+    const old = new ChatError("y", 503);
+    assert.equal(old.status, 503);
+    assert.equal(old.code, undefined);
+    assert.equal(old.retryAfter, undefined);
+    assert.equal(new ChatError("z").status, 400);
+  });
+});
+
+describe("isForeignKeyViolation", () => {
+  it("23503 kodunu doğrudan ve cause zincirinde tanır; diğer hataları tanımaz", () => {
+    assert.equal(isForeignKeyViolation(Object.assign(new Error("fk"), { code: "23503" })), true);
+    // drizzle sürücü hatasını cause içinde sarmalar
+    assert.equal(isForeignKeyViolation(Object.assign(new Error("Failed query"), { cause: Object.assign(new Error("fk"), { code: "23503" }) })), true);
+    assert.equal(isForeignKeyViolation(Object.assign(new Error("dup"), { code: "23505" })), false);
+    assert.equal(isForeignKeyViolation(new Error("x")), false);
+    assert.equal(isForeignKeyViolation(null), false);
+    assert.equal(isForeignKeyViolation("23503"), false);
+  });
+});
+
+describe("dailyLimitRetryAfter", () => {
+  const now = Date.UTC(2026, 9, 27, 12, 0, 0);
+  it("en eski mesajın 24 saatlik pencereden çıkışına kalan süre", () => {
+    assert.equal(dailyLimitRetryAfter(now - 23 * 3600_000, now), 3600);
+    assert.equal(dailyLimitRetryAfter(now - 22 * 3600_000, now), 2 * 3600);
+    // Kesirli saniye yukarı yuvarlanır.
+    assert.equal(dailyLimitRetryAfter(now - 23 * 3600_000 - 500, now), 3600);
+  });
+
+  it("en az 60 sn; bilinmiyorsa 60", () => {
+    assert.equal(dailyLimitRetryAfter(now - 24 * 3600_000 + 5_000, now), 60);
+    assert.equal(dailyLimitRetryAfter(now - 30 * 3600_000, now), 60);
+    assert.equal(dailyLimitRetryAfter(null, now), 60);
+    assert.equal(dailyLimitRetryAfter(undefined, now), 60);
+    assert.equal(dailyLimitRetryAfter(Number.NaN, now), 60);
   });
 });

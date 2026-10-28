@@ -80,6 +80,16 @@ export function abortKind(signal: { reason?: unknown } | null | undefined): Abor
   return name === "TimeoutError" ? "timeout" : "user";
 }
 
+export type ChatErrorCode =
+  | "mode_disabled"
+  | "not_configured"
+  | "daily_limit"
+  | "conversation_not_found"
+  | "conversation_mode_mismatch"
+  | "photos_disabled"
+  | "empty"
+  | "version_not_found";
+
 /**
  * Sohbet hazırlığında fırlatılan, bizim ürettiğimiz hata: `message` sabit Türkçe metindir (kullanıcı girdisi içermez).
  * `turn.ts` buradan yeniden dışa aktarır; saf yardımcıların (`describeEvalError`) test edilebilmesi için burada durur.
@@ -88,9 +98,32 @@ export class ChatError extends Error {
   constructor(
     message: string,
     public status = 400,
+    /** Makine okunur neden; köprü bunu sözleşmedeki `error` koduna çevirir. Widget yok sayar. */
+    public code?: ChatErrorCode,
+    /** `daily_limit` için: sınırın açılmasına kalan süre (sn). */
+    public retryAfter?: number,
   ) {
     super(message);
   }
+}
+
+/**
+ * Postgres yabancı anahtar ihlali (23503) mü? Sürücü hatası doğrudan ya da `cause` içinde (drizzle sarmalar) gelir.
+ * Konuşma/mesaj eklenirken sahip kullanıcı ya da konuşma bu arada silindiyse (KVKK silme) bu hata alınır.
+ */
+export function isForeignKeyViolation(e: unknown): boolean {
+  for (let cur = e, depth = 0; cur && typeof cur === "object" && depth < 4; depth++) {
+    const err = cur as { code?: unknown; cause?: unknown };
+    if (err.code === "23503") return true;
+    cur = err.cause;
+  }
+  return false;
+}
+
+/** Günlük sınırın açılmasına kalan süre (sn): en eski mesajın 24 saatlik pencereden çıkışı; en az 60. */
+export function dailyLimitRetryAfter(oldestMs: number | null | undefined, nowMs: number): number {
+  if (oldestMs == null || !Number.isFinite(oldestMs)) return 60;
+  return Math.max(60, Math.ceil((oldestMs + 24 * 3600 * 1000 - nowMs) / 1000));
 }
 
 /* ---------- Model hatası metni ---------- */

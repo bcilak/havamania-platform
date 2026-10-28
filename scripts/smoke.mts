@@ -9,6 +9,7 @@ import postgres from "postgres";
 import sharp from "sharp";
 import { stripCitations } from "../src/lib/ai/citations";
 import { isFollowUp } from "../src/lib/ai/retrieval-core";
+import { bridgeKeyHint, generateBridgeKey, hashBridgeKey } from "../src/lib/bridge/keys-core";
 import { gpsJpeg } from "../src/lib/image-fixtures";
 import { storage } from "../src/lib/storage";
 
@@ -18,7 +19,7 @@ const results: { name: string; ok: boolean; detail: string }[] = [];
 const check = (name: string, ok: boolean, detail = "") => results.push({ name, ok, detail });
 
 const [admin] = await sql`select id, email, name, role from admin_users where role = 'super_admin' and active order by created_at limit 1`;
-const [bot] = await sql`select public_key from bots order by created_at limit 1`;
+const [bot] = await sql`select id, public_key from bots order by created_at limit 1`;
 // Canlıda (SEED_DEMO=0) örnek konuşma yoksa gerçek bir konuşmaya bakılır; hiç yoksa detay sayfası atlanır.
 const [demoConv] = await sql`select id from conversations where platform <> 'playground' order by is_demo desc, last_message_at desc limit 1`;
 
@@ -44,6 +45,8 @@ const pages: [string, string][] = [
   ["/admin/medya", "Medya kütüphanesi"],
   ["/admin/konusmalar", "Konuşmalar"],
   ["/admin/konusmalar?durum=olumsuz", "Konuşmalar"],
+  ["/admin/konusmalar?kaynak=kopru", "Konuşmalar"],
+  ["/admin/konusmalar?kaynak=widget", "Konuşmalar"],
   ["/admin/fotograflar", "Fotoğraflar"],
   ["/admin/geri-bildirim", "Geri bildirim"],
   ["/admin/egitim/bilgi-tabani", "Bilgi tabanı"],
@@ -242,14 +245,195 @@ const home = await (await fetch(BASE + "/")).text();
 check("Landing CMS'ten üretiliyor", home.includes("data-scene=\"core\"") && home.includes("Dağınık veri"), "");
 
 /* ---------- Yasal sayfalar (Google Play / App Store) ---------- */
-for (const [path, needle] of [["/gizlilik", "KVKK"], ["/kullanim-kosullari", "Kullanım Koşulları"], ["/hesap-silme", "Silinen veriler"]]) {
+for (const [path, needle] of [["/gizlilik", "KVKK"], ["/kullanim-kosullari", "Kullanım Koşulları"], ["/hesap-silme", "Silinen veriler"], ["/kvkk", "Veri sorumlusu"]]) {
   const r = await fetch(BASE + path);
   const html = await r.text();
   check(`Yasal sayfa ${path}`, r.ok && html.includes(needle) && !html.includes("{{"), `${r.status}`);
 }
 const oldPrivacy = await fetch(BASE + "/privacy", { redirect: "manual" });
 check("/privacy → /gizlilik", oldPrivacy.status === 308 && (oldPrivacy.headers.get("location") ?? "").endsWith("/gizlilik"), `${oldPrivacy.status}`);
-check("Landing alt bilgisinde yasal bağlantılar", home.includes("href=\"/gizlilik\"") && home.includes("href=\"/hesap-silme\""), "");
+check("Landing alt bilgisinde yasal bağlantılar (KVKK dahil)", home.includes("href=\"/gizlilik\"") && home.includes("href=\"/hesap-silme\"") && home.includes("href=\"/kvkk\""), "");
+const sitemap = await (await fetch(BASE + "/sitemap.xml")).text();
+check("Site haritasında /kvkk", sitemap.includes("/kvkk</loc>"), "");
+
+/* ---------- Köprü (mobil backend, /api/bridge): kimlik, sözleşme, doğrulama, silme ---------- */
+// Test anahtarları SQL ile eklenir ve sonda silinir (test verisi temizliği; audit_log'a dokunulmaz).
+// Model gerekmeyen kontroller burada; model gerektirenler (/ask 200, feedback 204, kilit yarışı) smoke:chat'te.
+{
+  const BR = `${BASE}/api/bridge`;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const rndIp = () => `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`;
+  // Başarısız kimlik sayacı IP başınadır (20/dk); bu bölüm kendi IP'sini, anahtar beklemeleri her seferinde yenisini kullanır.
+  const brIp = rndIp();
+  type Init = { method?: string; headers?: Record<string, string>; body?: string; ip?: string };
+  const br = (path: string, key: string | null, init: Init = {}) =>
+    fetch(BR + path, { method: init.method ?? "GET", headers: { "x-forwarded-for": init.ip ?? brIp, ...(key ? { authorization: `Bearer ${key}` } : {}), ...init.headers }, body: init.body });
+  const brPost = (path: string, key: string | null, body: unknown, init: Init = {}) =>
+    br(path, key, { method: "POST", headers: { "content-type": "application/json", ...init.headers }, body: typeof body === "string" ? body : JSON.stringify(body), ip: init.ip });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const json = async (r: Response) => (await r.json().catch(() => ({}))) as Record<string, any>;
+
+  await sql`delete from bridge_keys where name like 'smoke-test-%'`;
+  const mkKey = async (label: string) => {
+    const key = generateBridgeKey();
+    await sql`insert into bridge_keys (bot_id, name, key_hash, hint, created_by) values (${bot.id}, ${`smoke-test-${label}`}, ${hashBridgeKey(key)}, ${bridgeKeyHint(key)}, 'smoke')`;
+    return key;
+  };
+  // Yeni anahtar önbellekte yoksa en çok ~5 sn içinde yeniden yüklenir (bkz. auth.ts).
+  const waitKey = async (key: string) => {
+    for (let i = 0; i < 9; i++) {
+      const r = await br("/consent", key, { ip: rndIp() });
+      await r.body?.cancel();
+      if (r.status !== 401) return r.status;
+      await sleep(1000);
+    }
+    return 401;
+  };
+  const stamp = Date.now();
+  const extIds = { a: `smoke-br-a-${stamp}`, b: `smoke-br-b-${stamp}`, old: `smoke-br-old-${stamp}`, v: `smoke-br-v-${stamp}` };
+  try {
+    const keyMain = await mkKey("ana");
+    const keyRev = await mkKey("iptal");
+    const ready = [await waitKey(keyMain), await waitKey(keyRev)];
+    check("Köprü: test anahtarları geçerli (önbellek yüklendi)", ready.every((s) => s === 200), ready.join(","));
+
+    /* Kimlik */
+    const noHdr = await br("/consent", null);
+    const noHdrJ = await json(noHdr);
+    check("Köprü: Authorization yok → 401 unauthorized ({error, message})", noHdr.status === 401 && noHdrJ.error === "unauthorized" && typeof noHdrJ.message === "string", `${noHdr.status} ${noHdrJ.error}`);
+    const badHeaders = ["Bearer hm_bk_", "Bearer hm_bk_kisa", `Bearer ${keyMain.slice(0, -1)}`, `Bearer ${keyMain}x`, `bearer ${keyMain}`, "Basic YWJjOmRlZg=="];
+    const badStatuses: number[] = [];
+    for (const h of badHeaders) {
+      const r = await br("/consent", null, { headers: { authorization: h } });
+      await r.body?.cancel();
+      badStatuses.push(r.status);
+    }
+    check("Köprü: bozuk / eksik / fazla uzun / küçük harfli 'bearer' / Basic başlık → 401", badStatuses.every((s) => s === 401), badStatuses.join(","));
+    const unknown = await br("/consent", generateBridgeKey());
+    await unknown.body?.cancel();
+    check("Köprü: biçimi doğru ama bilinmeyen anahtar → 401", unknown.status === 401, `${unknown.status}`);
+    const postNoKey = await brPost("/ask", null, { user_id: "x", question: "x", consent_version: 1 });
+    await postNoKey.body?.cancel();
+    check("Köprü: anahtarsız POST /ask → 401 (gövde okunmadan)", postNoKey.status === 401, `${postNoKey.status}`);
+
+    /* /consent: tek kaynak, başlıklar */
+    const cons = await br("/consent", keyMain);
+    const consJ = await json(cons);
+    const cv = consJ.version as number;
+    check(
+      "Köprü: GET /consent 200, sürüm widget ile aynı, metinde {{ yok, updated_at ISO",
+      cons.status === 200 && Number.isInteger(cv) && cv === s1j.consentVersion && typeof consJ.text === "string" && !consJ.text.includes("{{") && !Number.isNaN(Date.parse(consJ.updated_at)) && new Date(consJ.updated_at).toISOString() === consJ.updated_at,
+      `${cons.status} v${cv} (widget v${s1j.consentVersion})`,
+    );
+    check("Köprü: onay metni widget oturumuyla birebir aynı (tek kaynak)", consJ.text === s1j.consentText, "");
+    check("Köprü: yanıtlarda cache-control no-store, JSON, CORS başlığı yok", (cons.headers.get("cache-control") ?? "").includes("no-store") && (cons.headers.get("content-type") ?? "").includes("application/json") && !cons.headers.has("access-control-allow-origin") && !noHdr.headers.has("access-control-allow-origin") && (noHdr.headers.get("cache-control") ?? "").includes("no-store"), "");
+    const opt = await br("/consent", keyMain, { method: "OPTIONS" });
+    await opt.body?.cancel();
+    check("Köprü: OPTIONS CORS yanıtı vermiyor", !opt.headers.has("access-control-allow-origin"), `${opt.status}`);
+
+    /* Gövde ve doğrulama (hepsi model çağrısından önce sonuçlanır) */
+    const q = (over: Record<string, unknown>) => ({ user_id: extIds.v, question: "Merhaba", consent_version: cv, ...over });
+    const big = await brPost("/ask", keyMain, `{"user_id":"x","question":"${"a".repeat(33 * 1024)}"}`);
+    const bigJ = await json(big);
+    check("Köprü: 33 KB gövde → 413 too_large", big.status === 413 && bigJ.error === "too_large", `${big.status} ${bigJ.error}`);
+    const plain = await br("/ask", keyMain, { method: "POST", headers: { "content-type": "text/plain" }, body: "{}" });
+    check("Köprü: text/plain → 400", plain.status === 400, `${plain.status}`);
+    const cases: [string, unknown, number, string][] = [
+      ["bozuk JSON", "{bozuk", 400, "invalid_request"],
+      ["soru 4001 karakter", q({ question: "a".repeat(4001) }), 413, "too_large"],
+      ["soru boşluk", q({ question: "   " }), 400, "invalid_request"],
+      ["context.weather 2001 karakter", q({ context: { weather: "h".repeat(2001) } }), 413, "too_large"],
+      ["context.city 101 karakter", q({ context: { city: "c".repeat(101) } }), 413, "too_large"],
+      ["profil alanı 501 karakter", q({ context: { profile: { interest: "i".repeat(501) } } }), 413, "too_large"],
+      ["mode: x", q({ mode: "x" }), 400, "invalid_request"],
+      ["language: en", q({ language: "en" }), 400, "invalid_request"],
+      ["user_id satır sonu", q({ user_id: "a\nb" }), 400, "invalid_request"],
+      ["user_id 129 karakter", q({ user_id: "u".repeat(129) }), 400, "invalid_request"],
+      ["consent_version yok", { user_id: extIds.v, question: "Merhaba" }, 400, "invalid_request"],
+      ["conversation_id UUID değil", q({ conversation_id: "abc" }), 400, "invalid_request"],
+    ];
+    for (const [label, body, status, error] of cases) {
+      const r = await brPost("/ask", keyMain, body);
+      const j = await json(r);
+      check(`Köprü: /ask ${label} → ${status} ${error}`, r.status === status && j.error === error && typeof j.message === "string", `${r.status} ${j.error}`);
+    }
+
+    /* Onay sürümü: eski sürümle 428, kullanıcı kaydı oluşmaz */
+    const oldV = cv > 1 ? cv - 1 : cv + 1;
+    const r428 = await brPost("/ask", keyMain, { user_id: extIds.old, question: "Merhaba", consent_version: oldV });
+    const r428j = await json(r428);
+    const [{ n: oldUsers }] = await sql`select count(*)::int as n from app_users where bot_id = ${bot.id} and external_user_id = ${extIds.old}`;
+    check(
+      "Köprü: /ask eski onay sürümüyle 428 consent_required, gövdede güncel onay metni, kullanıcı kaydı yok",
+      r428.status === 428 && r428j.error === "consent_required" && r428j.consent?.version === cv && r428j.consent?.text === consJ.text && oldUsers === 0,
+      `${r428.status} · app_users ${oldUsers}`,
+    );
+
+    /* /feedback ve /delete-user (SQL ile açılan kullanıcılar) */
+    const mkUser = async (ext: string) =>
+      (await sql`insert into app_users (bot_id, device_id, external_user_id, platform, consent_version, consent_at) values (${bot.id}, 'bridge', ${ext}, 'android', ${cv}, now()) returning id`)[0].id as string;
+    const userA = await mkUser(extIds.a);
+    await mkUser(extIds.b);
+    const convA = crypto.randomUUID();
+    await sql`insert into conversations (id, bot_id, app_user_id, mode, platform, version_number, is_demo) values (${convA}, ${bot.id}, ${userA}, 'genel', 'android', 1, false)`;
+    const [msgA] = await sql`insert into messages (conversation_id, role, content) values (${convA}, 'assistant', 'Smoke cevabı') returning id`;
+    const fbOther = await brPost("/feedback", keyMain, { user_id: extIds.b, message_id: msgA.id, rating: 1 });
+    const fbUnknown = await brPost("/feedback", keyMain, { user_id: `smoke-br-yok-${stamp}`, message_id: msgA.id, rating: 1 });
+    const fbRand = await brPost("/feedback", keyMain, { user_id: extIds.a, message_id: crypto.randomUUID(), rating: 1 });
+    const fbBadRating = await brPost("/feedback", keyMain, { user_id: extIds.a, message_id: msgA.id, rating: 0 });
+    const fbLong = await brPost("/feedback", keyMain, { user_id: extIds.a, message_id: msgA.id, rating: 1, comment: "k".repeat(1001) });
+    const fbCodes = await Promise.all([fbOther, fbUnknown, fbRand].map(async (r) => (await json(r)).error));
+    check("Köprü: /feedback başka kullanıcının / kayıtsız kullanıcının / olmayan mesaj → 404 not_found", [fbOther, fbUnknown, fbRand].every((r) => r.status === 404) && fbCodes.every((c) => c === "not_found"), [fbOther, fbUnknown, fbRand].map((r) => r.status).join(","));
+    check("Köprü: /feedback rating 0 → 400, yorum 1001 karakter → 413", fbBadRating.status === 400 && fbLong.status === 413, `${fbBadRating.status},${fbLong.status}`);
+    const fbOk = await brPost("/feedback", keyMain, { user_id: extIds.a, message_id: msgA.id, rating: 1 });
+    const [fbRow] = await sql`select rating from feedback where message_id = ${msgA.id}`;
+    check("Köprü: /feedback kendi mesajına 204, gövde boş, kayıt oluştu", fbOk.status === 204 && (await fbOk.text()) === "" && fbRow?.rating === 1, `${fbOk.status}`);
+
+    const [{ n: auditBefore }] = await sql`select count(*)::int as n from audit_log where action = 'kvkk.delete_user'`;
+    const del1 = await brPost("/delete-user", keyMain, { user_id: extIds.a });
+    const del1j = await json(del1);
+    const del2 = await brPost("/delete-user", keyMain, { user_id: extIds.a });
+    const del2j = await json(del2);
+    const [{ n: leftUsers }] = await sql`select count(*)::int as n from app_users where id = ${userA}`;
+    const [{ n: leftConvs }] = await sql`select count(*)::int as n from conversations where id = ${convA}`;
+    check("Köprü: /delete-user ilk çağrı 200 {1, 0}, kullanıcı ve konuşma kalmadı", del1.status === 200 && del1j.deleted_conversations === 1 && del1j.deleted_photos === 0 && leftUsers === 0 && leftConvs === 0, `${del1.status} ${JSON.stringify(del1j)}`);
+    check("Köprü: /delete-user idempotent (ikinci çağrı 200 {0, 0})", del2.status === 200 && del2j.deleted_conversations === 0 && del2j.deleted_photos === 0, `${del2.status} ${JSON.stringify(del2j)}`);
+    const [{ n: auditAfter }] = await sql`select count(*)::int as n from audit_log where action = 'kvkk.delete_user'`;
+    const [{ n: rawInAudit }] = await sql`select count(*)::int as n from audit_log where detail::text like ${`%${extIds.a}%`} or target like ${`%${extIds.a}%`}`;
+    const [{ n: rawInDeletion }] = await sql`select count(*)::int as n from deletion_requests where identifier = ${extIds.a}`;
+    check("Köprü: silme denetim kaydı yazıldı ama ham user_id denetimde ve silme talebinde yok (maskeli)", auditAfter - auditBefore === 2 && rawInAudit === 0 && rawInDeletion === 0, `denetim +${auditAfter - auditBefore} · ham: ${rawInAudit}/${rawInDeletion}`);
+    const delBad = await brPost("/delete-user", keyMain, { user_id: "" });
+    check("Köprü: /delete-user boş user_id → 400", delBad.status === 400, `${delBad.status}`);
+
+    /* Widget, köprü kimliğine bürünemez */
+    for (const dev of ["bridge", "Bridge-123"]) {
+      const r = await fetch(BASE + "/api/widget/session", { method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": rndIp() }, body: JSON.stringify({ botKey: bot.public_key, deviceId: dev, platform: "android" }) });
+      await r.body?.cancel();
+      check(`Widget oturumu: ayrılmış deviceId "${dev}" → 400`, r.status === 400, `${r.status}`);
+    }
+
+    /* İptal: iptal edilen anahtar önbellek yenilenince 401 olur (TTL 30 sn; bilinmeyen anahtar ≥5 sn sonra yeniden yüklemeyi tetikler) */
+    await sql`update bridge_keys set revoked_at = now(), revoked_by = 'smoke' where key_hash = ${hashBridgeKey(keyRev)}`;
+    await sleep(5500);
+    const reload = await br("/consent", generateBridgeKey());
+    await reload.body?.cancel();
+    let revStatus = 0;
+    for (let i = 0; i < 4; i++) {
+      const r = await br("/consent", keyRev, { ip: rndIp() });
+      await r.body?.cancel();
+      revStatus = r.status;
+      if (revStatus === 401) break;
+      await sleep(1000);
+    }
+    const mainAfter = await br("/consent", keyMain);
+    await mainAfter.body?.cancel();
+    check("Köprü: iptal edilen anahtar 401, diğer anahtar çalışmaya devam ediyor", revStatus === 401 && mainAfter.status === 200, `iptal ${revStatus} · ana ${mainAfter.status}`);
+  } finally {
+    await sql`delete from bridge_keys where name like 'smoke-test-%'`;
+    await sql`delete from conversations where app_user_id in (select id from app_users where device_id = 'bridge' and external_user_id like 'smoke-br-%')`;
+    await sql`delete from app_users where device_id = 'bridge' and external_user_id like 'smoke-br-%'`;
+  }
+}
 
 /* ---------- Prompt önizleme ucu: yetki, CSRF, doğrulama, yazmama ---------- */
 // Destek rolü gerçek bir kullanıcı satırı ister (rol veritabanından okunur); geçici satır sonda silinir.
@@ -388,6 +572,54 @@ try {
     check("Yönetici: debug ucu ham araç verisi döner", adminDbg.includes(piiLat) && adminDbg.includes("Smokepiikoy"), "");
   } finally {
     await sql`delete from conversations where id = ${piiConv}`;
+  }
+}
+/* ---------- Destek rolü: sağlık işaretli (health_context) konuşmanın içeriğini göremez ---------- */
+{
+  const notice = "Bu konuşma sağlık bilgisi içerebilir; içeriği görme yetkiniz yok.";
+  const hConv = crypto.randomUUID();
+  const hTitle = "Smokehealthtitle";
+  const hUser = "Smokehealthmsg polen alerjim var, nerede yürüyüş yapabilirim";
+  const hAnswer = "Smokehealthans polen yoğunluğu düşük bölgeleri öneririm";
+  const hComment = "Smokehealthcmt cevap işime yaramadı";
+  const hQuery = "Smokehealthsrc polen alerjisi yürüyüş";
+  await sql`insert into conversations (id, bot_id, mode, platform, version_number, is_demo, title, health_context) values (${hConv}, ${gapBot.id}, 'genel', 'web', 1, false, ${hTitle}, true)`;
+  await sql`insert into messages (conversation_id, role, content, created_at) values (${hConv}, 'user', ${hUser}, now() - interval '2 seconds')`;
+  const [hm] = await sql`insert into messages (conversation_id, role, content, search_query, created_at) values (${hConv}, 'assistant', ${hAnswer}, ${hQuery}, now() - interval '1 second') returning id`;
+  await sql`insert into feedback (message_id, conversation_id, rating, comment) values (${hm.id}, ${hConv}, -1, ${hComment})`;
+  const raws = [hTitle, hUser, hAnswer, hComment, hQuery];
+  const leaks = (html: string) => raws.filter((r) => html.includes(r));
+  try {
+    const sup = (path: string) => fetch(BASE + path, { headers: { cookie: gapCookie } });
+    const detail = await sup(`/admin/konusmalar/${hConv}`);
+    const detailHtml = await detail.text();
+    check("Destek: sağlık işaretli konuşma detayı 200, uyarı var, içerik/başlık/yorum yok", detail.status === 200 && detailHtml.includes(notice) && leaks(detailHtml).length === 0, `${detail.status} ${leaks(detailHtml).join(" | ")}`);
+    const list = await (await sup(`/admin/konusmalar?aralik=tumu`)).text();
+    check("Destek: konuşma listesinde sağlık işaretli konuşmanın başlığı yok", list.includes(`/admin/konusmalar/${hConv}`) && !list.includes(hTitle), "");
+    const search = await (await sup(`/admin/konusmalar?q=Smokehealthmsg&aralik=tumu`)).text();
+    check("Destek: sağlık işaretli konuşma mesaj aramasıyla bulunamaz", !search.includes(`/admin/konusmalar/${hConv}`), "");
+    const fbHtml = await (await sup(`/admin/geri-bildirim`)).text();
+    check("Destek: geri bildirimde sağlık işaretli konuşmanın soru/cevap/yorumu yok, uyarı var", fbHtml.includes(notice) && leaks(fbHtml).length === 0, leaks(fbHtml).join(" | "));
+    const panoHtml = await (await sup(`/admin`)).text();
+    check("Destek: pano (son konuşmalar, geri bildirim) sağlık işaretli içeriği göstermiyor", leaks(panoHtml).length === 0, leaks(panoHtml).join(" | "));
+    const dbg = await sup(`/api/admin/messages/${hm.id}`);
+    const dbgText = await dbg.text();
+    const dbgJson = (() => {
+      try {
+        return JSON.parse(dbgText);
+      } catch {
+        return {};
+      }
+    })();
+    check("Destek: /api/admin/messages/[id] sağlık işaretli konuşmada kısıtlı (sorgu/hata/araç yok)", dbg.status === 200 && dbgJson.restricted === true && leaks(dbgText).length === 0 && dbgJson.notice === notice, `${dbg.status} ${leaks(dbgText).join(" | ")}`);
+    // pii yetkili rol içeriği görür; yine de düzeltme/senaryo kopyası alamaz.
+    const adminHtml = await (await fetch(BASE + `/admin/konusmalar/${hConv}`, { headers: { cookie } })).text();
+    check("Yönetici: sağlık işaretli konuşma içeriğini görür", adminHtml.includes(hUser) && adminHtml.includes(hAnswer) && !adminHtml.includes(notice), "");
+    check("Yönetici: sağlık işaretli konuşmada düzeltme ve senaryo formu yok", !adminHtml.includes("Bu cevabı düzelt") && !adminHtml.includes("Senaryoya ekle"), "");
+    const adminDbg = await (await fetch(BASE + `/api/admin/messages/${hm.id}`, { headers: { cookie } })).text();
+    check("Yönetici: debug ucu sağlık işaretli konuşmada sorguyu döner", adminDbg.includes(hQuery), "");
+  } finally {
+    await sql`delete from conversations where id = ${hConv}`;
   }
 }
 await sql`delete from admin_users where id = ${supportUser.id}`;

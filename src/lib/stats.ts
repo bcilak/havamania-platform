@@ -77,7 +77,7 @@ export const GAP_MAX_QUESTIONS = 1000;
 /*
  * Boşluk analizinin ham verisi: cevapsız (bilgi tabanında karşılık yok, araç yok) ya da olumsuz geri bildirimli
  * asistan cevaplarının kullanıcı soruları, en yeniden eskiye, en çok `limit` tane. Test alanı, örnek veri ve
- * anonimleştirilmiş konuşmalar katılmaz. Yalnızca metni olan sorular alınır (fotoğraf-only gruplanamaz).
+ * anonimleştirilmiş konuşmalar ile sağlık bilgisi içerebilen (health_context) konuşmalar katılmaz: sorular senaryo/düzeltme olarak kopyalanabildiği için. Yalnızca metni olan sorular alınır (fotoğraf-only gruplanamaz).
  */
 export async function gapQuestions(opts: { days: number; mode?: string | null; limit?: number }): Promise<GapQuestion[]> {
   const days = Math.min(GAP_MAX_DAYS, Math.max(1, Math.floor(opts.days)));
@@ -99,6 +99,7 @@ export async function gapQuestions(opts: { days: number; mode?: string | null; l
     where m.role = 'assistant'
       and (m.unanswered or f.rating = -1)
       and c.platform <> 'playground' and not c.is_demo and c.anonymized_at is null
+      and not c.health_context
       and m.created_at >= now() - make_interval(days => ${days})
       and (${mode}::text is null or c.mode = ${mode})
       and btrim(q.content) <> ''

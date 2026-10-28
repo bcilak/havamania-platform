@@ -3,6 +3,9 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { appUsers, attachments, conversations, messages, type Platform } from "@/db/schema";
 import { getBotByPublicKey, getPublishedVersion } from "@/lib/bot";
+import { isReservedDeviceId } from "@/lib/bridge/keys-core";
+import { renderConsentText } from "@/lib/consent";
+import { appUrl } from "@/lib/consent-server";
 import { decryptOrNull } from "@/lib/crypto";
 import { allow, clientIp, LIMITS, tooMany } from "@/lib/rate-limit";
 import { signedFileUrl, signWidgetToken, verifyAppUserToken } from "@/lib/session";
@@ -23,6 +26,8 @@ export async function POST(request: Request) {
   const bot = typeof botKey === "string" ? await getBotByPublicKey(botKey) : null;
   if (!bot) return err("Asistan bulunamadı.", 404);
   if (typeof deviceId !== "string" || deviceId.length < 6 || deviceId.length > 200) return err("Cihaz kimliği eksik.", 400);
+  // "bridge" öneki mobil köprüye ayrılmıştır; widget istemcisi köprü kimliğine bürünemez.
+  if (isReservedDeviceId(deviceId)) return err("Cihaz kimliği eksik.", 400);
   const plat: Platform = platform === "ios" || platform === "android" ? platform : "web";
 
   let externalUserId: string | null = null;
@@ -69,7 +74,8 @@ export async function POST(request: Request) {
   }
 
   if (user.consentVersion !== kvkk.consentVersion) {
-    return NextResponse.json({ consentRequired: true, consentText: kvkk.consentText, consentVersion: kvkk.consentVersion });
+    const consentText = renderConsentText(kvkk, await getSetting("legal"), appUrl());
+    return NextResponse.json({ consentRequired: true, consentText, consentVersion: kvkk.consentVersion });
   }
 
   const token = await signWidgetToken({ appUserId: user.id, botId: bot.id, platform: plat });

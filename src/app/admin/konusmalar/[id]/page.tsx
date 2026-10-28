@@ -5,15 +5,16 @@ import { Bot, ChevronLeft, CircleAlert, ClipboardCheck, Flag, PenLine, ThumbsDow
 import { db } from "@/db";
 import { appUsers, attachments, conversations, corrections, feedback, messages } from "@/db/schema";
 import { ConfirmButton, SubmitButton } from "@/components/client";
-import { Badge, btn, checkboxCls, cx, Flash, KeyValue, ModeBadge, PageHeader, Panel, textareaCls } from "@/components/ui";
+import { Badge, btn, checkboxCls, cx, Flash, KeyValue, ModeBadge, Notice, PageHeader, Panel, textareaCls } from "@/components/ui";
 import { describeMatch } from "@/lib/ai/retrieval-core";
 import { requireAdmin } from "@/lib/auth";
 import { getMainBot } from "@/lib/bot";
 import { MODE_DISCLAIMERS, MODE_META } from "@/lib/bot-config";
 import { loadCorrectionStatus } from "@/lib/corrections";
 import type { SearchParams } from "@/lib/form";
+import { BRIDGE_DEVICE_ID } from "@/lib/bridge/keys-core";
 import { fmtDateTime, fmtInt, fmtTime, fmtUsd, maskId, PLATFORM_LABEL } from "@/lib/format";
-import { piiPayload, piiText } from "@/lib/pii-mask";
+import { HEALTH_RESTRICTED_NOTICE, healthRestricted, piiPayload, piiText } from "@/lib/pii-mask";
 import { can } from "@/lib/roles";
 import { SourceForm } from "@/components/admin/SourceForm";
 import { addCaseFromMessage, addCorrection, deleteConversation, deletePhoto, toggleFlag, togglePhoto } from "./actions";
@@ -38,15 +39,18 @@ export default async function ConversationDetail({ params, searchParams }: { par
   if (!c) notFound();
   const [user] = c.appUserId ? await db.select().from(appUsers).where(eq(appUsers.id, c.appUserId)) : [];
   const msgs = await db.select().from(messages).where(eq(messages.conversationId, id)).orderBy(asc(messages.createdAt));
+  const pii = can(admin.role, "pii");
+  // Sağlık bilgisi içerebilen konuşma: pii yetkisi olmayan rol içeriği (mesaj, başlık, yorum, sorgu, araç verisi, fotoğraf) görmez.
+  const restricted = healthRestricted(pii, c.healthContext);
   const ids = msgs.map((m) => m.id);
-  const photos = ids.length ? await db.select().from(attachments).where(inArray(attachments.messageId, ids)) : [];
+  const photos = ids.length && !restricted ? await db.select().from(attachments).where(inArray(attachments.messageId, ids)) : [];
   const fbs = ids.length ? await db.select().from(feedback).where(inArray(feedback.messageId, ids)) : [];
   const fixes = ids.length ? await db.select().from(corrections).where(inArray(corrections.messageId, ids)) : [];
   const fixStatus = fixes.length ? await loadCorrectionStatus(await getMainBot()) : null;
 
-  const pii = can(admin.role, "pii");
   // Düzeltme/senaryo formları ham metni forma gömer; yalnızca kişisel veriyi görebilen rollere açılır.
-  const canTrain = can(admin.role, "training") && pii;
+  // Sağlık işaretli konuşmadan kopya alınmaz: düzeltme ve senaryo kalıcıdır, saklama süresi ve silmeyle temizlenmez.
+  const canTrain = can(admin.role, "training") && pii && !c.healthContext;
   const canDelete = can(admin.role, "kvkk");
   const self = `/admin/konusmalar/${id}`;
   const disclaimer = MODE_DISCLAIMERS[c.mode];
@@ -57,7 +61,7 @@ export default async function ConversationDetail({ params, searchParams }: { par
         <ChevronLeft className="size-4" /> Konuşmalar
       </Link>
       <PageHeader
-        title={c.title ? piiText(pii, c.title) : "Başlıksız konuşma"}
+        title={restricted ? "İçerik gizli" : c.title ? piiText(pii, c.title) : "Başlıksız konuşma"}
         actions={
           <>
             <form action={toggleFlag}>
@@ -76,6 +80,15 @@ export default async function ConversationDetail({ params, searchParams }: { par
         }
       />
       <Flash sp={sp} />
+      {c.healthContext && (
+        <div className="mb-4">
+          <Notice tone="warn">
+            {restricted
+              ? HEALTH_RESTRICTED_NOTICE
+              : "Bu konuşma sağlık bilgisi içerebilir (kullanıcının sağlık hassasiyetleri asistana gönderildi). Düzeltme ve test senaryosu olarak kopyalanamaz; içeriği gerekmedikçe paylaşmayın."}
+          </Notice>
+        </div>
+      )}
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
         <ol className="grid gap-4" aria-label="Mesajlar">
@@ -120,14 +133,15 @@ export default async function ConversationDetail({ params, searchParams }: { par
                     )}
                   </div>
 
-                  {m.content && <div className="text-[15px] leading-relaxed whitespace-pre-wrap">{piiText(pii, m.content)}</div>}
-                  {m.error && (
+                  {restricted && <p className="text-sm text-muted">{HEALTH_RESTRICTED_NOTICE}</p>}
+                  {!restricted && m.content && <div className="text-[15px] leading-relaxed whitespace-pre-wrap">{piiText(pii, m.content)}</div>}
+                  {!restricted && m.error && (
                     <div className="mt-2 flex items-start gap-2 rounded-lg bg-bad-soft px-3 py-2 text-xs">
                       <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-bad" />
                       <span className="font-mono break-all">{piiText(pii, m.error)}</span>
                     </div>
                   )}
-                  {fb?.comment && <p className="mt-2 rounded-lg bg-sunken px-3 py-2 text-sm">Kullanıcı yorumu: “{piiText(pii, fb.comment)}”</p>}
+                  {!restricted && fb?.comment && <p className="mt-2 rounded-lg bg-sunken px-3 py-2 text-sm">Kullanıcı yorumu: “{piiText(pii, fb.comment)}”</p>}
 
                   {own.length > 0 && (
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -160,7 +174,7 @@ export default async function ConversationDetail({ params, searchParams }: { par
 
                   {!isUser && disclaimer && <p className="mt-3 border-t border-line pt-2 text-xs text-muted">Kullanıcıya gösterilen uyarı: {disclaimer}</p>}
 
-                  {!isUser && (m.toolCalls.length > 0 || m.sources.length > 0 || canTrain) && (
+                  {!isUser && !restricted && (m.toolCalls.length > 0 || m.sources.length > 0 || canTrain) && (
                     <div className="mt-3 grid gap-2">
                       {m.toolCalls.length > 0 && (
                         <details className="rounded-lg border border-line">
@@ -277,6 +291,7 @@ export default async function ConversationDetail({ params, searchParams }: { par
               ]}
             />
             {c.isDemo && <Badge className="mt-3">Örnek veri</Badge>}
+            {user?.deviceId === BRIDGE_DEVICE_ID && <Badge tone="accent" className="mt-3">Mobil (native)</Badge>}
           </Panel>
           {user && (
             <Panel title="Kullanıcı" description={pii ? undefined : "Kişisel veriler rolünüz gereği maskeli."}>

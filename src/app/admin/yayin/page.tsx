@@ -4,12 +4,13 @@ import Link from "next/link";
 import { desc, eq } from "drizzle-orm";
 import { FlaskConical, Rocket } from "lucide-react";
 import { db } from "@/db";
-import { evalRuns, kbSources, providers } from "@/db/schema";
+import { bridgeKeys, evalRuns, kbSources, providers } from "@/db/schema";
 import { ConfirmButton, CopyButton, SubmitButton } from "@/components/client";
 import { Badge, btn, checkboxCls, EmptyState, Field, Flash, inputCls, KeyValue, Notice, PageHeader, Panel, TableWrap, td, th } from "@/components/ui";
 import { effectiveEmbedding, embeddingLabel, pendingIndexOnModelSwitch, sameEmbedding } from "@/lib/ai/embedding-freeze";
 import { diffSources, pendingIndexCount, publishableSourceIds } from "@/lib/ai/kb-lifecycle";
 import { requireAdmin } from "@/lib/auth";
+import { MAX_ACTIVE_KEYS } from "@/lib/bridge/keys-core";
 import { MODEL_PROBLEM_TEXT } from "@/lib/ai/model-meta";
 import { configModelProblems, countVersions, getMainBot, getPublishedVersion, listVersionSummaries, versionPageOf } from "@/lib/bot";
 import { diffConfigs, summarizeChanges } from "@/lib/config-diff";
@@ -21,6 +22,7 @@ import { fmtDateTime, fmtRelative } from "@/lib/format";
 import { can } from "@/lib/roles";
 import { getSetting } from "@/lib/settings";
 import { publish, publishPendingCorrections, regenerateSecret, rollback, saveAccess } from "./actions";
+import { BridgeKeys } from "./BridgeKeys";
 
 export const metadata = { title: "Sürümler ve gömme" };
 
@@ -75,6 +77,9 @@ export default async function PublishPage({ searchParams }: { searchParams: Sear
   const corrections = await loadCorrectionStatus(bot);
   const appUrl = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
   const secret = param(sp, "anahtar") === "goster" && can(admin.role, "users") ? decryptOrNull(bot.tokenSecretEnc) : null;
+  // Köprü anahtarları yalnızca "users" yetkisine görünür; liste anahtarın kendisini değil ipucunu taşır.
+  const canBridge = can(admin.role, "users");
+  const bridgeRows = canBridge ? await db.select().from(bridgeKeys).where(eq(bridgeKeys.botId, bot.id)).orderBy(desc(bridgeKeys.createdAt)).limit(50) : [];
 
   const [swift, kotlin] = await Promise.all([readSdk("ios/HavamaniaChat.swift", bot.publicKey, appUrl), readSdk("android/HavamaniaChat.kt", bot.publicKey, appUrl)]);
   const swiftUsage = `let chat = HavamaniaChat(
@@ -371,6 +376,18 @@ const token = await new SignJWT({})
           </div>
         </Panel>
       </div>
+
+      {canBridge && (
+        <div className="mb-5">
+          <Panel title="Mobil backend köprüsü" description="Mobil uygulamanın backend'i, kullanıcı adına asistanla konuşmak için bu anahtarla sunucudan sunucuya istek atar. Anahtar yalnızca oluşturulduğu anda görünür; burada yalnızca SHA-256 özeti saklanır.">
+            <BridgeKeys
+              baseUrl={`${appUrl}/api/bridge`}
+              maxActive={MAX_ACTIVE_KEYS}
+              keys={bridgeRows.map((k) => ({ id: k.id, name: k.name, hint: k.hint, created: fmtDateTime(k.createdAt), lastUsed: k.lastUsedAt ? fmtDateTime(k.lastUsedAt) : "hiç kullanılmadı", revoked: Boolean(k.revokedAt) }))}
+            />
+          </Panel>
+        </div>
+      )}
 
       <div className="grid gap-4">
         {[

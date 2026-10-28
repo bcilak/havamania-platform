@@ -17,7 +17,7 @@ import { getPublishedVersion, type BotRow, type BotVersionRow } from "@/lib/bot"
 import { runImageWork } from "@/lib/image-limiter";
 import { ensureClean } from "@/lib/image-sanitize";
 import { storage } from "@/lib/storage";
-import { buildInstructions } from "./prompt";
+import { buildInstructions, hasHealthContext, type AnswerFormat, type ClientContext } from "./prompt";
 import { citedNumbers, stripCitations } from "./citations";
 import { embeddingCostOf } from "./embedding-cost";
 import { costOf, ModelConfigError, resolveModel } from "./providers";
@@ -27,7 +27,7 @@ import { buildSearchQuery, isUnanswered } from "./retrieval-core";
 import { buildTools } from "./tools";
 import type { UserLocation } from "./location";
 import { effectiveMaxOutputTokens, isReasoningModel } from "./model-meta";
-import { abortedContent, abortKind, abortedUsage, ChatError, describeError, effectiveTarget, exposeTurnData, promptChars, type TurnTarget } from "./turn-core";
+import { abortedContent, abortKind, abortedUsage, ChatError, dailyLimitRetryAfter, describeError, effectiveTarget, exposeTurnData, isForeignKeyViolation, promptChars, type TurnTarget } from "./turn-core";
 import { redactToolStream, stripCitationStream } from "./ui-stream";
 
 /*
@@ -63,6 +63,10 @@ export type ChatInput = {
   persist?: "conversation" | "none";
   /** Moddaki tonu bu tonla değiştirir (mobil köprü). Geçersiz değer yok sayılır. */
   tone?: ToneId;
+  /** Mobil uygulamanın eklediği bağlam (şehir, hava, seyahat, profil). Yalnızca prompt'a veri olarak girer; veritabanına yazılmaz. */
+  clientContext?: ClientContext;
+  /** "plain": cevap düz metin istenir (mobil köprü). Yoksa prompt değişmez. */
+  answerFormat?: AnswerFormat;
   /** İstemci bağlantıyı kapatırsa (Durdur) model çağrısı da kesilir. */
   abortSignal?: AbortSignal;
 };
@@ -153,15 +157,15 @@ async function resolveSettings(input: Pick<ChatInput, "bot" | "platform" | "useD
   let v: BotVersionRow | null;
   if (target === "published") {
     v = await getPublishedVersion(input.bot);
-    if (!v) throw new ChatError("Asistan henüz yayınlanmadı.", 503);
+    if (!v) throw new ChatError("Asistan henüz yayınlanmadı.", 503, "not_configured");
   } else {
     // Sürüm kimliği başka bota ait olabilir; bot koşulu sızıntıyı engeller.
-    if (!UUID_RE.test(target.versionId)) throw new ChatError("Sürüm bulunamadı.", 404);
+    if (!UUID_RE.test(target.versionId)) throw new ChatError("Sürüm bulunamadı.", 404, "version_not_found");
     const [row] = await db
       .select()
       .from(botVersions)
       .where(and(eq(botVersions.id, target.versionId), eq(botVersions.botId, input.bot.id)));
-    if (!row) throw new ChatError("Sürüm bulunamadı.", 404);
+    if (!row) throw new ChatError("Sürüm bulunamadı.", 404, "version_not_found");
     v = { ...row, config: normalizeBotConfig(row.config, { frozen: true }) };
   }
   return { config: v.config, allowedSourceIds: v.kbSourceIds, frozenEmbedding: v.embedding, versionNumber: v.number };
@@ -176,7 +180,7 @@ export async function previewPrompt(input: { bot: BotRow; mode: ChatMode; text: 
   const { bot, mode, text, location, target } = input;
   const { config, allowedSourceIds, frozenEmbedding, versionNumber } = await resolveSettings({ bot, platform: "playground", useDraft: true, target });
   const modeCfg = config.modes[mode];
-  if (!modeCfg?.enabled) throw new ChatError("Bu mod şu anda kapalı.", 400);
+  if (!modeCfg?.enabled) throw new ChatError("Bu mod şu anda kapalı.", 400, "mode_disabled");
 
   const notes: string[] = [];
   let ranked: RankedKnowledgeHit[] = [];
@@ -237,24 +241,24 @@ export async function prepareTurn(input: ChatInput): Promise<PreparedTurn> {
     config = { ...config, modes: { ...config.modes, [input.mode]: { ...config.modes[input.mode], tone: input.tone } } };
   }
   const modeCfg = config.modes[input.mode];
-  if (!modeCfg?.enabled) throw new ChatError("Bu mod şu anda kapalı.", 400);
+  if (!modeCfg?.enabled) throw new ChatError("Bu mod şu anda kapalı.", 400, "mode_disabled");
   if (!modeCfg.providerId || !modeCfg.model) {
-    throw new ChatError("Bu mod için henüz bir yapay zekâ modeli seçilmedi.", 503);
+    throw new ChatError("Bu mod için henüz bir yapay zekâ modeli seçilmedi.", 503, "not_configured");
   }
 
   const text = input.text.trim().slice(0, 4000);
-  if (!text && !input.attachmentIds.length) throw new ChatError("Mesaj boş.", 400);
+  if (!text && !input.attachmentIds.length) throw new ChatError("Mesaj boş.", 400, "empty");
 
   /* 2. Günlük sınır */
   if (appUser && config.maxMessagesPerDay > 0) {
     const since = new Date(Date.now() - 24 * 3600 * 1000);
-    const [{ n }] = await db
-      .select({ n: sql<number>`count(*)::int` })
+    const [{ n, oldestMs }] = await db
+      .select({ n: sql<number>`count(*)::int`, oldestMs: sql<number | null>`(extract(epoch from min(${messages.createdAt})) * 1000)::float8` })
       .from(messages)
       .innerJoin(conversations, eq(messages.conversationId, conversations.id))
       .where(and(eq(conversations.appUserId, appUser.id), eq(messages.role, "user"), gte(messages.createdAt, since)));
     if (n >= config.maxMessagesPerDay) {
-      throw new ChatError("Günlük mesaj sınırına ulaştınız. Yarın tekrar deneyebilirsiniz.", 429);
+      throw new ChatError("Günlük mesaj sınırına ulaştınız. Yarın tekrar deneyebilirsiniz.", 429, "daily_limit", dailyLimitRetryAfter(oldestMs, Date.now()));
     }
   }
 
@@ -263,7 +267,7 @@ export async function prepareTurn(input: ChatInput): Promise<PreparedTurn> {
   try {
     resolved = await resolveModel(modeCfg.providerId, modeCfg.model);
   } catch (e) {
-    throw new ChatError(e instanceof ModelConfigError ? e.message : "Model yüklenemedi.", 503);
+    throw new ChatError(e instanceof ModelConfigError ? e.message : "Model yüklenemedi.", 503, "not_configured");
   }
 
   /* 4. Konuşma: yoksa oluştur, varsa sahipliğini doğrula */
@@ -272,29 +276,35 @@ export async function prepareTurn(input: ChatInput): Promise<PreparedTurn> {
     const [existing] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
     if (existing) {
       if (existing.botId !== bot.id || (existing.appUserId ?? null) !== (appUser?.id ?? null)) {
-        throw new ChatError("Konuşma bulunamadı.", 404);
+        throw new ChatError("Konuşma bulunamadı.", 404, "conversation_not_found");
       }
       // Bir konuşma tek moddadır; mod değişince istemci yeni konuşma açar.
       if (existing.mode !== input.mode) {
-        throw new ChatError("Bu konuşma başka bir modda. Yeni bir konuşma başlatın.", 409);
+        throw new ChatError("Bu konuşma başka bir modda. Yeni bir konuşma başlatın.", 409, "conversation_mode_mismatch");
       }
     } else {
-      await db.insert(conversations).values({
-        id: conversationId,
-        botId: bot.id,
-        appUserId: appUser?.id ?? null,
-        mode: input.mode,
-        platform: input.platform,
-        versionNumber,
-        title: (text || "Fotoğraf").slice(0, 80),
-      });
+      try {
+        await db.insert(conversations).values({
+          id: conversationId,
+          botId: bot.id,
+          appUserId: appUser?.id ?? null,
+          mode: input.mode,
+          platform: input.platform,
+          versionNumber,
+          title: (text || "Fotoğraf").slice(0, 80),
+        });
+      } catch (e) {
+        // Kullanıcı bu arada silindi (KVKK silme satırı kilitler; kilit kalkınca FK hatası gelir). Sahipsiz konuşma açılmaz.
+        if (isForeignKeyViolation(e)) throw new ChatError("Konuşma bulunamadı.", 404, "conversation_not_found");
+        throw e;
+      }
     }
   }
 
   /* 5. Bu mesajın fotoğrafları: yalnızca bu kullanıcının, henüz bağlanmamış yüklemeleri */
   let photos: AttachmentRow[] = [];
   if (persist && input.attachmentIds.length) {
-    if (!config.photosEnabled) throw new ChatError("Fotoğraf gönderimi şu anda kapalı.", 400);
+    if (!config.photosEnabled) throw new ChatError("Fotoğraf gönderimi şu anda kapalı.", 400, "photos_disabled");
     photos = await db
       .select()
       .from(attachments)
@@ -317,7 +327,16 @@ export async function prepareTurn(input: ChatInput): Promise<PreparedTurn> {
 
   /* 7. Kullanıcı mesajını kaydet */
   if (persist) {
-    const [userRow] = await db.insert(messages).values({ conversationId, role: "user", content: text }).returning();
+    const userRow = await db
+      .insert(messages)
+      .values({ conversationId, role: "user", content: text })
+      .returning()
+      .then(([row]) => row)
+      .catch((e: unknown) => {
+        // Konuşma bu arada silindi (KVKK silme).
+        if (isForeignKeyViolation(e)) throw new ChatError("Konuşma bulunamadı.", 404, "conversation_not_found");
+        throw e;
+      });
     if (photos.length) {
       await db.update(attachments).set({ messageId: userRow.id, conversationId }).where(inArray(attachments.id, photos.map((p) => p.id)));
     }
@@ -376,7 +395,20 @@ export async function prepareTurn(input: ChatInput): Promise<PreparedTurn> {
   /* 10. Prompt ve araçlar */
   const toolsAvailable = resolved.meta.tools;
   const tools = toolsAvailable ? buildTools(modeCfg.tools, { location: input.location }) : undefined;
-  const instructions = buildInstructions({ config, mode: input.mode, hits, location: input.location, toolsAvailable });
+  const instructions = buildInstructions({
+    config,
+    mode: input.mode,
+    hits,
+    location: input.location,
+    toolsAvailable,
+    clientContext: input.clientContext,
+    answerFormat: input.answerFormat,
+  });
+  // Sağlık hassasiyeti (KVKK m. 6) yalnızca gerçekten prompt'a girdiyse konuşma işaretlenir: cevaplar bu bilgiye dayanabilir,
+  // bu yüzden pii yetkisi olmayan roller içeriği görmez ve konuşmadan senaryo/düzeltme kopyası alınamaz. İşaret geri alınmaz.
+  if (persist && hasHealthContext(input.clientContext)) {
+    await db.update(conversations).set({ healthContext: true }).where(eq(conversations.id, conversationId));
+  }
   const sources: SourceRecord[] = hits.map((h) => ({
     sourceId: h.sourceId,
     title: h.title,
@@ -528,7 +560,8 @@ export function streamTurn(turn: PreparedTurn): Response {
       });
     },
     onError: async ({ error }) => {
-      console.error("[chat] model hatası:", error);
+      // Ham hata nesnesi istek gövdesini (prompt, uygulama bağlamı) taşıyabilir; yalnızca sınıf ve durum loglanır.
+      console.error("[chat] model hatası:", describeError(error));
       await persistAssistant(turn, {
         content: "",
         toolCalls: [],
@@ -556,6 +589,8 @@ export type TurnResult = {
   text: string;
   /** Model hatası (iç metin; kullanıcıya gösterilmemeli). Başarıda null. */
   error: string | null;
+  /** Çağrı iptal/zaman aşımıyla kesildi (kayıt kısmi metin + not taşır). Tam cevap kaydedildiyse false; sonradan tetiklenen sinyal bunu değiştirmez. */
+  aborted: boolean;
   unanswered: boolean;
   conversationId: string;
   versionNumber: number | null;
@@ -578,6 +613,7 @@ export type TurnResult = {
 export async function runTurnOnce(turn: PreparedTurn): Promise<TurnResult> {
   const { input, modeCfg } = turn;
   let saved: SavedAssistant;
+  let aborted = false;
   let toolCalls: ToolCallRecord[] = [];
   // İptal/zaman aşımında tamamlanmış adımların metni ve kullanımı (streamTurn'deki onAbort ile tutarlı).
   const doneSteps: (StepLike & { text: string; usage: { inputTokens?: number; outputTokens?: number } })[] = [];
@@ -605,6 +641,7 @@ export async function runTurnOnce(turn: PreparedTurn): Promise<TurnResult> {
     });
   } catch (e) {
     if (input.abortSignal?.aborted) {
+      aborted = true;
       const partial = doneSteps.map((s) => s.text).join("");
       const { inTok, outTok } = abortedUsage({
         promptChars: promptChars(turn.instructions, turn.modelMessages),
@@ -615,7 +652,7 @@ export async function runTurnOnce(turn: PreparedTurn): Promise<TurnResult> {
       toolCalls = toolCallsOf(doneSteps);
       saved = await persistAssistant(turn, { content: abortedContent(partial, abortKind(input.abortSignal)), toolCalls, inTok, outTok, error: null, aborted: true });
     } else {
-      console.error("[chat] model hatası:", e);
+      console.error("[chat] model hatası:", describeError(e));
       saved = await persistAssistant(turn, {
         content: "",
         toolCalls: [],
@@ -629,6 +666,7 @@ export async function runTurnOnce(turn: PreparedTurn): Promise<TurnResult> {
     messageId: saved.id,
     text: saved.content,
     error: saved.error,
+    aborted,
     unanswered: saved.unanswered,
     conversationId: turn.conversationId,
     versionNumber: turn.versionNumber,

@@ -1,14 +1,15 @@
 import Link from "next/link";
-import { and, desc, eq, gte, gt, ilike, inArray, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, gte, gt, ilike, inArray, isNull, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { Camera, Flag, MessagesSquare, ThumbsDown } from "lucide-react";
 import { db } from "@/db";
 import { appUsers, conversations, messages, type ChatMode, type Platform } from "@/db/schema";
 import { Badge, btn, EmptyState, Flash, inputCls, ModeBadge, PageHeader, selectCls, TableWrap, td, th } from "@/components/ui";
 import { requireAdmin } from "@/lib/auth";
+import { BRIDGE_DEVICE_ID } from "@/lib/bridge/keys-core";
 import { MODES, MODE_META } from "@/lib/bot-config";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtInt, fmtRelative, fmtUsd, maskId, PLATFORM_LABEL } from "@/lib/format";
-import { maskPii, piiText } from "@/lib/pii-mask";
+import { healthRestricted, maskPii, piiText } from "@/lib/pii-mask";
 import { can } from "@/lib/roles";
 
 export const metadata = { title: "Konuşmalar" };
@@ -28,6 +29,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
   const mode = param(sp, "mod") as ChatMode | "";
   const platform = param(sp, "platform") as Platform | "";
   const state = param(sp, "durum");
+  const source = param(sp, "kaynak");
   const range = param(sp, "aralik") || "30";
   const page = Math.max(1, Number(param(sp, "sayfa")) || 1);
 
@@ -35,6 +37,10 @@ export default async function ConversationsPage({ searchParams }: { searchParams
   if (platform) where.push(eq(conversations.platform, platform));
   else where.push(ne(conversations.platform, "playground"));
   if (mode && MODES.includes(mode)) where.push(eq(conversations.mode, mode));
+  // Kaynak: köprü (mobil backend, sunucudan sunucuya) ya da widget/web ve test alanı.
+  const bridgeUsers = db.select({ id: appUsers.id }).from(appUsers).where(eq(appUsers.deviceId, BRIDGE_DEVICE_ID));
+  if (source === "kopru") where.push(inArray(conversations.appUserId, bridgeUsers));
+  if (source === "widget") where.push(or(isNull(conversations.appUserId), notInArray(conversations.appUserId, bridgeUsers))!);
   if (range !== "tumu") where.push(gte(conversations.lastMessageAt, sql`now() - make_interval(days => ${Number(range) || 30})`));
   if (state === "olumsuz") where.push(gt(conversations.negativeCount, 0));
   if (state === "isaretli") where.push(eq(conversations.flagged, true));
@@ -44,6 +50,8 @@ export default async function ConversationsPage({ searchParams }: { searchParams
   // Engellenen arama filtresiz tüm listeyi döndürmez; sonuç boş kalır (arama kutusu da boş basılır).
   if (searchBlocked) where.push(sql`false`);
   if (q) {
+    // Sağlık işaretli konuşmalar içerik aramasıyla yetkisiz rolden "var/yok" diye sorgulanamaz.
+    if (!pii) where.push(eq(conversations.healthContext, false));
     where.push(
       or(
         ilike(conversations.title, like),
@@ -65,7 +73,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
   const pages = Math.max(1, Math.ceil(total / PAGE));
   const qs = (p: number) => {
     const u = new URLSearchParams();
-    for (const [k, v] of Object.entries({ q, mod: mode, platform, durum: state, aralik: range })) if (v) u.set(k, v);
+    for (const [k, v] of Object.entries({ q, mod: mode, platform, durum: state, kaynak: source, aralik: range })) if (v) u.set(k, v);
     u.set("sayfa", String(p));
     return `?${u}`;
   };
@@ -97,6 +105,11 @@ export default async function ConversationsPage({ searchParams }: { searchParams
           <option value="web">Web</option>
           <option value="playground">Test alanı</option>
         </select>
+        <select name="kaynak" defaultValue={source} aria-label="Kaynak" className={`${selectCls} w-auto`}>
+          <option value="">Tüm kaynaklar</option>
+          <option value="kopru">Mobil (native, köprü)</option>
+          <option value="widget">Widget / web</option>
+        </select>
         <select name="durum" defaultValue={state} aria-label="Durum" className={`${selectCls} w-auto`}>
           <option value="">Hepsi</option>
           <option value="olumsuz">Olumsuz geri bildirim alan</option>
@@ -111,7 +124,7 @@ export default async function ConversationsPage({ searchParams }: { searchParams
           <option value="tumu">Tüm zamanlar</option>
         </select>
         <button className={btn("secondary")}>Uygula</button>
-        {(q || mode || platform || state || range !== "30") && (
+        {(q || mode || platform || state || source || range !== "30") && (
           <Link href="/admin/konusmalar" className={btn("ghost")}>
             Temizle
           </Link>
@@ -137,10 +150,11 @@ export default async function ConversationsPage({ searchParams }: { searchParams
                 <tr key={c.id} className="hover:bg-sunken/60">
                   <td className={td}>
                     <Link href={`/admin/konusmalar/${c.id}`} className="font-medium hover:text-accent">
-                      {c.title ? piiText(pii, c.title) : "Başlıksız"}
+                      {healthRestricted(pii, c.healthContext) ? "İçerik gizli (sağlık bilgisi içerebilir)" : c.title ? piiText(pii, c.title) : "Başlıksız"}
                     </Link>
                     <div className="mt-1 flex flex-wrap gap-1.5">
                       {c.isDemo && <Badge>Örnek</Badge>}
+                      {deviceId === BRIDGE_DEVICE_ID && <Badge tone="accent">Mobil (native)</Badge>}
                       {c.negativeCount > 0 && (
                         <Badge tone="bad">
                           <ThumbsDown className="size-3" /> {c.negativeCount}
@@ -192,8 +206,8 @@ export default async function ConversationsPage({ searchParams }: { searchParams
         </>
       ) : (
         <div className="rounded-xl border border-line bg-surface">
-          <EmptyState icon={MessagesSquare} title={searchBlocked || q || mode || platform || state ? "Filtreye uyan konuşma yok" : "Henüz konuşma yok"}>
-            {searchBlocked || q || mode || platform || state
+          <EmptyState icon={MessagesSquare} title={searchBlocked || q || mode || platform || state || source ? "Filtreye uyan konuşma yok" : "Henüz konuşma yok"}>
+            {searchBlocked || q || mode || platform || state || source
               ? "Filtreleri değiştirmeyi ya da tarih aralığını genişletmeyi deneyin."
               : "Asistan uygulamaya gömüldüğünde konuşmalar burada listelenecek. Bu arada Test alanında deneyebilirsiniz."}
           </EmptyState>

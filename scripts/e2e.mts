@@ -7,7 +7,7 @@
 import fs from "node:fs";
 import { and, eq, gte, inArray, like } from "drizzle-orm";
 import { db, sqlClient } from "../src/db/index";
-import { appUsers, botVersions, bots, conversations, kbSources, providers, settings } from "../src/db/schema";
+import { appUsers, botVersions, bots, bridgeKeys, conversations, kbSources, providers, settings } from "../src/db/schema";
 import { publishDraft } from "../src/lib/bot";
 import { MODES, normalizeBotConfig } from "../src/lib/bot-config";
 import { processSource } from "../src/lib/ai/ingest";
@@ -98,10 +98,18 @@ if (cmd === "setup") {
     await db.delete(conversations).where(inArray(conversations.appUserId, users.map((u) => u.id)));
     await db.delete(appUsers).where(inArray(appUsers.id, users.map((u) => u.id)));
   }
+  // Köprü testleri (smoke:chat): test kullanıcıları (device_id 'bridge', external_user_id 'e2e-br-…') ve test anahtarları.
+  // Denetim kaydına (audit_log) dokunulmaz; yalnızca test verisi silinir.
+  const bridgeUsers = await db.select({ id: appUsers.id }).from(appUsers).where(and(eq(appUsers.deviceId, "bridge"), like(appUsers.externalUserId, "e2e-br-%")));
+  if (bridgeUsers.length) {
+    await db.delete(conversations).where(inArray(conversations.appUserId, bridgeUsers.map((u) => u.id)));
+    await db.delete(appUsers).where(inArray(appUsers.id, bridgeUsers.map((u) => u.id)));
+  }
+  const testKeys = await db.delete(bridgeKeys).where(like(bridgeKeys.name, "e2e-bridge-%")).returning({ id: bridgeKeys.id });
   // Yalnızca test sırasında açılan test alanı konuşmaları; öncekilere dokunulmaz.
   await db.delete(conversations).where(and(eq(conversations.platform, "playground"), gte(conversations.startedAt, new Date(snap.startedAt))));
   fs.rmSync(SNAP);
-  console.log(`Geri alındı: ${extra.length} test sürümü, sahte sağlayıcı ve ${users.length} test kullanıcısı silindi.`);
+  console.log(`Geri alındı: ${extra.length} test sürümü, sahte sağlayıcı, ${users.length} test kullanıcısı, ${bridgeUsers.length} köprü test kullanıcısı ve ${testKeys.length} köprü test anahtarı silindi.`);
 } else {
   console.log("Kullanım: npm run e2e -- setup | teardown");
 }

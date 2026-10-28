@@ -1,9 +1,9 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, count, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { botVersions, bots } from "@/db/schema";
+import { botVersions, bots, bridgeKeys } from "@/db/schema";
 import { MODEL_PROBLEM_TEXT } from "@/lib/ai/model-meta";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
@@ -11,6 +11,8 @@ import { checkRollback, configModelProblems, getMainBot, PublishError, publishCo
 import { encrypt, randomToken } from "@/lib/crypto";
 import { bool, done, fail, str, strStrict } from "@/lib/form";
 import { VERSION_NOTE_MAX } from "@/lib/form-limits";
+import { invalidateBridgeKeyCache } from "@/lib/bridge/auth";
+import { bridgeKeyHint, generateBridgeKey, hashBridgeKey, MAX_ACTIVE_KEYS } from "@/lib/bridge/keys-core";
 
 const BACK = "/admin/yayin";
 
@@ -105,4 +107,52 @@ export async function regenerateSecret() {
   await db.update(bots).set({ tokenSecretEnc: encrypt(randomToken(32)), updatedAt: new Date() }).where(eq(bots.id, bot.id));
   await audit(admin, "bot.token_secret");
   done(`${BACK}?anahtar=goster#gomme`, "Yeni anahtar oluşturuldu. Uygulama backend'inize girin; eski anahtarla imzalanan token'lar artık geçersiz.");
+}
+
+/** Anahtar yalnızca `ok: true` dönüşünde bulunur; URL'ye, flash mesajına ya da log'a girmez. */
+export type BridgeKeyState = { ok: true; key: string } | { ok: false; error: string } | null;
+
+const BRIDGE_KEY_NAME_MAX = 60;
+
+/** Mobil backend köprüsü için sunucu anahtarı üretir. En çok `MAX_ACTIVE_KEYS` etkin anahtar (rotasyon için ikincisi). */
+export async function createBridgeKey(_prev: BridgeKeyState, fd: FormData): Promise<BridgeKeyState> {
+  const admin = await requireAdmin("users");
+  const name = str(fd, "name", 200);
+  if (!name || name.length > BRIDGE_KEY_NAME_MAX) return { ok: false, error: `Ad 1-${BRIDGE_KEY_NAME_MAX} karakter olmalı.` };
+  const bot = await getMainBot();
+  const created = await db.transaction(async (tx) => {
+    // Eşzamanlı iki oluşturma sıraya girsin; etkin anahtar sayısı kilit altında sayılır.
+    await tx.select({ id: bots.id }).from(bots).where(eq(bots.id, bot.id)).for("update");
+    const [{ n }] = await tx.select({ n: count() }).from(bridgeKeys).where(and(eq(bridgeKeys.botId, bot.id), isNull(bridgeKeys.revokedAt)));
+    if (n >= MAX_ACTIVE_KEYS) return null;
+    const key = generateBridgeKey();
+    const [row] = await tx
+      .insert(bridgeKeys)
+      .values({ botId: bot.id, name, keyHash: hashBridgeKey(key), hint: bridgeKeyHint(key), createdBy: admin.email })
+      .returning({ id: bridgeKeys.id, hint: bridgeKeys.hint });
+    return { key, id: row.id, hint: row.hint };
+  });
+  if (!created) return { ok: false, error: `En çok ${MAX_ACTIVE_KEYS} etkin anahtar olabilir. Önce birini iptal edin.` };
+  await audit(admin, "bridge.key_create", name, { keyId: created.id, hint: created.hint });
+  invalidateBridgeKeyCache();
+  revalidatePath(BACK);
+  return { ok: true, key: created.key };
+}
+
+/** Anahtarı iptal eder; satır silinmez (denetim izi). İptal en geç önbellek süresi (30 sn) içinde etkinleşir. */
+export async function revokeBridgeKey(fd: FormData) {
+  const admin = await requireAdmin("users");
+  const bot = await getMainBot();
+  const keyId = str(fd, "keyId");
+  if (!UUID.test(keyId)) fail(BACK, "Anahtar bulunamadı.");
+  const [row] = await db
+    .update(bridgeKeys)
+    .set({ revokedAt: new Date(), revokedBy: admin.email })
+    .where(and(eq(bridgeKeys.id, keyId), eq(bridgeKeys.botId, bot.id), isNull(bridgeKeys.revokedAt)))
+    .returning({ name: bridgeKeys.name, hint: bridgeKeys.hint });
+  if (!row) fail(BACK, "Anahtar bulunamadı ya da zaten iptal edilmiş.");
+  await audit(admin, "bridge.key_revoke", row!.name, { keyId, hint: row!.hint });
+  invalidateBridgeKeyCache();
+  revalidatePath(BACK);
+  done(BACK, "Köprü anahtarı iptal edildi. Birkaç saniye içinde geçersiz olur.");
 }

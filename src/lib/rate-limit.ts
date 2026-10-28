@@ -31,7 +31,22 @@ export const LIMITS = {
   kbSearchPerMin: envInt("RATE_LIMIT_KB_SEARCH_PER_MIN", 20),
   /** Boşluk analizinde anlamsal birleştirme (embedding çağrısı yapar); yönetici başına. */
   gapSemanticPerMin: envInt("RATE_LIMIT_GAP_SEMANTIC_PER_MIN", 6),
+  /** Mobil backend köprüsü: kullanıcı başına, anahtar başına ve IP başına başarısız kimlik denemesi. */
+  bridgePerMinPerUser: envInt("RATE_LIMIT_BRIDGE_PER_USER_PER_MIN", 8),
+  bridgePerMinPerKey: envInt("RATE_LIMIT_BRIDGE_PER_KEY_PER_MIN", 120),
+  bridgeAuthFailPerMin: envInt("RATE_LIMIT_BRIDGE_AUTH_FAIL_PER_MIN", 20),
+  /** /ask: anahtar başına aynı anda çalışan istek, bekleyen kuyruk ve kuyrukta en uzun bekleme (ms). Dolunca 429. */
+  bridgeConcurrencyPerKey: envInt("RATE_LIMIT_BRIDGE_CONCURRENCY", 16),
+  bridgeQueuePerKey: envInt("RATE_LIMIT_BRIDGE_QUEUE", 32),
+  bridgeQueueWaitMs: envInt("RATE_LIMIT_BRIDGE_QUEUE_WAIT_MS", 10_000),
+  /** /ask: bot başına günlük köprü mesajı tavanı (maliyet). Kalıcı sayaçtan (bridge_usage) sayılır; silmeyle sıfırlanmaz. */
+  bridgeDailyPerBot: envInt("BRIDGE_DAILY_MESSAGES_PER_BOT", 5000),
 };
+
+/** Dakikalık sınır aşıldığında istemcinin beklemesi gereken süre (sn): bir jeton dolana kadar. */
+export function retryAfterFor(perMinute: number): number {
+  return Math.max(1, Math.ceil(60 / perMinute));
+}
 
 /** true: istek geçebilir. */
 export function allow(key: string, perMinute: number): boolean {

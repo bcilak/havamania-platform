@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import { SignJWT } from "jose";
 import postgres from "postgres";
+import { hashBridgeKey } from "../src/lib/bridge/keys-core";
 
 const BASE = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
 const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
@@ -583,6 +584,85 @@ loc = locDelCase;
 const [gone] = await sql`select id from eval_cases where id = ${evCase.id}`;
 check("Senaryo: silindi ve audit_log'a eval.case_delete yazıldı", loc.includes("ok=") && !gone && (await evAudit("eval.case_delete", evCase.id)) === 1, loc);
 await sql`delete from eval_cases where question like ${evTag + "%"}`;
+
+/* ---------- 8. Köprü anahtarı: panelden üret, kullan, iptal et ---------- */
+// createBridgeKey(prev, formData) useActionState ile bağlıdır; tarayıcı bunu React'in istemci protokolüyle çağırır:
+// multipart gövde, form alanları "_1_<alan>" (önek: "_" + FormData kimliği + "_") ve alan "0" = [önceki durum, "$K1"].
+// SIRA ÖNEMLİ: sunucu "0" alanını gelir gelmez çözer; "$K1" ancak alanlar önceden geldiyse dolu FormData verir
+// (alanlar sonra gelirse eylem boş form alır).
+// Yanıt React Flight akışıdır: "0:{"a":"$@1",…}" satırı dönüş değerinin "1:…" satırında olduğunu söyler.
+/** Flight satırlarından kök satırdaki "$@N" referansını çözer; dönüş değerinin ham JSON metnini döner (bulunamazsa tüm yanıt). */
+function resolveFlightReturn(flight: string): string {
+  const lines = flight.split("\n");
+  const root = lines.find((l) => l.startsWith("0:")) ?? "";
+  const ref = /"a":"\$@([0-9a-f]+)"/.exec(root)?.[1];
+  if (!ref) return flight;
+  const target = lines.find((l) => l.startsWith(`${ref}:`));
+  return target ? target.slice(ref.length + 1) : flight;
+}
+async function actState(page: string, name: string, fields: Record<string, string>): Promise<string> {
+  const fd = new FormData();
+  for (const [k, v] of Object.entries(fields)) fd.append(`_1_${k}`, v);
+  fd.append("0", JSON.stringify([null, "$K1"]));
+  const res = await fetch(BASE + page, { method: "POST", headers: { cookie: `hm_admin=${token}`, "next-action": actionId(name, page), accept: "text/x-component" }, body: fd });
+  return resolveFlightReturn(await res.text());
+}
+const keyName = `smoke-actions-${Date.now()}`;
+const bridgeAudit = async (action: string) => (await sql`select count(*)::int as n from audit_log where action = ${action}`)[0].n as number;
+await sql`delete from bridge_keys where name like 'smoke-actions-%'`;
+try {
+  const [{ n: activeBefore }] = await sql`select count(*)::int as n from bridge_keys where bot_id = ${bot.id} and revoked_at is null`;
+  const createdBefore = await bridgeAudit("bridge.key_create");
+  const revokedBefore = await bridgeAudit("bridge.key_revoke");
+  const tooLong = await actState("/admin/yayin", "createBridgeKey", { name: "k".repeat(61) });
+  const [{ n: afterLong }] = await sql`select count(*)::int as n from bridge_keys where bot_id = ${bot.id} and revoked_at is null`;
+  check("Köprü anahtarı: 61 karakterlik ad reddedilir, anahtar oluşmaz", tooLong.includes('"ok":false') && !tooLong.includes("hm_bk_") && afterLong === activeBefore, tooLong.slice(0, 120));
+
+  const out = await actState("/admin/yayin", "createBridgeKey", { name: keyName });
+  const key = /"ok":true,"key":"(hm_bk_[A-Za-z0-9_-]{43})"/.exec(out)?.[1];
+  if (activeBefore >= 2) {
+    check("Köprü anahtarı: 2 etkin anahtar varken yenisi reddedilir", !key && out.includes('"ok":false') && out.includes("En çok"), out.slice(0, 160));
+  } else {
+    check("Köprü anahtarı: panel eylemi anahtarı bir kez döndürür", Boolean(key), key ? "hm_bk_…" : out.slice(0, 160));
+    const [row] = await sql`select id, key_hash, hint, created_by, revoked_at from bridge_keys where name = ${keyName}`;
+    check(
+      "Köprü anahtarı: veritabanında yalnızca SHA-256 özeti (64 hex) ve son 4 karakter; düz anahtar hiçbir sütunda yok",
+      Boolean(key && row) && /^[0-9a-f]{64}$/.test(row.key_hash) && row.key_hash === hashBridgeKey(key!) && row.hint === key!.slice(-4) && !JSON.stringify(row).includes(key!) && row.created_by === admin.email,
+      row ? `hint ${row.hint}` : "satır yok",
+    );
+    const [auditRow] = await sql`select detail::text as d from audit_log where action = 'bridge.key_create' order by created_at desc limit 1`;
+    check("Köprü anahtarı: audit_log'a bridge.key_create yazıldı, anahtarın kendisi yazılmadı", (await bridgeAudit("bridge.key_create")) === createdBefore + 1 && Boolean(key) && !auditRow.d.includes(key!) && auditRow.d.includes(row?.id ?? "?"), "");
+
+    // Anahtar çalışır (panel eylemi sunucudaki önbelleği temizler; yine de kısa süre beklenir).
+    let used = 0;
+    for (let i = 0; i < 8 && used !== 200 && key; i++) {
+      const r = await fetch(`${BASE}/api/bridge/consent`, { headers: { authorization: `Bearer ${key}`, "x-forwarded-for": `10.${Math.floor(Math.random() * 250)}.1.1` } });
+      await r.body?.cancel();
+      used = r.status;
+      if (used !== 200) await new Promise((r2) => setTimeout(r2, 1000));
+    }
+    check("Köprü anahtarı: panelden üretilen anahtarla GET /api/bridge/consent 200", used === 200, `${used}`);
+
+    loc = await act("/admin/yayin", "revokeBridgeKey", { keyId: row?.id ?? "" });
+    const [revoked] = await sql`select revoked_at, revoked_by from bridge_keys where id = ${row?.id ?? "00000000-0000-0000-0000-000000000000"}`;
+    check(
+      "Köprü anahtarı: iptal satırı silmez (revoked_at/revoked_by dolu), audit_log'a bridge.key_revoke yazıldı",
+      loc.includes("ok=") && Boolean(revoked?.revoked_at) && revoked.revoked_by === admin.email && (await bridgeAudit("bridge.key_revoke")) === revokedBefore + 1,
+      loc,
+    );
+    let after = 0;
+    for (let i = 0; i < 4 && after !== 401 && key; i++) {
+      const r = await fetch(`${BASE}/api/bridge/consent`, { headers: { authorization: `Bearer ${key}`, "x-forwarded-for": `10.${Math.floor(Math.random() * 250)}.2.2` } });
+      await r.body?.cancel();
+      after = r.status;
+      if (after !== 401) await new Promise((r2) => setTimeout(r2, 1000));
+    }
+    check("Köprü anahtarı: iptal edilen anahtar 401 (önbellek eylemle temizlenir)", after === 401, `${after}`);
+  }
+} finally {
+  // Test verisi temizliği; denetim kaydı (audit_log) silinmez.
+  await sql`delete from bridge_keys where name like 'smoke-actions-%'`;
+}
 
 // Kaynakları ve oluşturulan sürümleri temizle; yayındaki sürüm başlangıca dönsün.
 if (origVersion) await sql`update bots set published_version_id = ${origVersion.id} where id = ${bot.id}`;

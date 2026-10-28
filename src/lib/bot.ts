@@ -24,6 +24,12 @@ export async function getBotByPublicKey(publicKey: string): Promise<BotRow | nul
   return bot ? { ...bot, draftConfig: normalizeBotConfig(bot.draftConfig) } : null;
 }
 
+/** Köprü isteklerinde bot, anahtardan gelen kimlikle bulunur. */
+export async function getBotById(botId: string): Promise<BotRow | null> {
+  const [bot] = await db.select().from(bots).where(eq(bots.id, botId));
+  return bot ? { ...bot, draftConfig: normalizeBotConfig(bot.draftConfig) } : null;
+}
+
 export async function getPublishedVersion(bot: BotRow): Promise<BotVersionRow | null> {
   if (!bot.publishedVersionId) return null;
   const [v] = await db.select().from(botVersions).where(eq(botVersions.id, bot.publishedVersionId));

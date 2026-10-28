@@ -197,6 +197,12 @@ hm run --rm tools npx drizzle-kit push    # "truncate" sorarsa HAYIR
 hm up -d app
 ```
 
+Bu sürümle gelenler (`bridge_keys` tablosu ekleme-yalnızca bir şema değişikliğidir; `--force` kullanmayın):
+
+- **Mobil backend köprüsü:** Panelde Yayın › Gömme › Köprü anahtarları'ndan anahtar üretip mobil backend'e (`api.havamania.com`) girin. Rotasyon: yeni anahtar → backend'e gir → eskisini iptal et. İsteğe bağlı ortam değişkenleri: `BRIDGE_TIMEOUT_MS` (43000), `RATE_LIMIT_BRIDGE_PER_USER_PER_MIN` (8), `RATE_LIMIT_BRIDGE_PER_KEY_PER_MIN` (120), `RATE_LIMIT_BRIDGE_CONCURRENCY` (16, anahtar başına aynı anda çalışan /ask; `RATE_LIMIT_BRIDGE_QUEUE` 32 bekleyen, `RATE_LIMIT_BRIDGE_QUEUE_WAIT_MS` 10000; dolunca 429 `rate_limited` + `Retry-After`), `BRIDGE_DAILY_MESSAGES_PER_BOT` (5000, bot başına günlük köprü mesajı tavanı; kalıcı `bridge_usage` sayacından sayılır, konuşma silmeyle sıfırlanmaz; dolunca 429 `daily_limit`), `RATE_LIMIT_BRIDGE_AUTH_FAIL_PER_MIN` (20). Apache arkasında `X-Forwarded-For` iletildiğinden emin olun (IP başına sayaçlar buna bakar).
+- **Yasal metinler:** `/admin/yasal` sayfasını açın. "Kayıtlı metin güncel varsayılandan farklı" uyarısı çıkan gizlilik ve hesap silme metinleri kendiliğinden güncellenmez; "varsayılana döndür"ü işaretleyip kaydedin. Yeni `/kvkk` sayfası otomatik gelir. Hukuk onayından geçirmeden yayınlamayın.
+- **Onay metni:** Kayıtlı bir `kvkk` ayarı varsa yeni açık rıza metnini Yönetim › KVKK'dan girin (sürüm artar, widget ve uygulama 428 ile yeniden onay ister). Ayar satırı yoksa yeni varsayılan sürüm 2 olarak kendiliğinden geçerli olur.
+
 ### Eski fotoğrafların meta verisini temizleme (tek seferlik)
 
 Yeni yüklemeler otomatik temizlenir. Önceden yüklenmiş fotoğraflardaki EXIF/GPS için geçiş betiği çalıştırılır. Önce `hm build tools` ile tools imajını yeniden derleyin, sonra:

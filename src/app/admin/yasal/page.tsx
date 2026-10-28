@@ -3,7 +3,8 @@ import { CopyButton, SubmitButton } from "@/components/client";
 import { checkboxCls, Field, Flash, inputCls, Notice, PageHeader, Panel, textareaCls } from "@/components/ui";
 import { requireAdmin } from "@/lib/auth";
 import type { SearchParams } from "@/lib/form";
-import { formatLegalDate, LEGAL_PAGES, LEGAL_TOKENS, type LegalSlug } from "@/lib/legal";
+import { aiProviderList } from "@/lib/legal-providers";
+import { formatLegalDate, LEGAL_BODY_DEFAULTS, LEGAL_PAGES, LEGAL_TOKENS, type LegalSlug } from "@/lib/legal";
 import { getSetting } from "@/lib/settings";
 import { saveLegal } from "./actions";
 
@@ -15,12 +16,13 @@ export default async function LegalAdminPage({ searchParams }: { searchParams: S
   const [cfg, kvkk] = await Promise.all([getSetting("legal"), getSetting("kvkk")]);
   const site = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
   const slugs = Object.keys(LEGAL_PAGES) as LegalSlug[];
+  const aiProviders = await aiProviderList();
 
   return (
     <>
       <PageHeader
         title="Yasal sayfalar"
-        description={`Gizlilik politikası, kullanım koşulları ve hesap silme sayfası. Kaydettiğiniz anda yayınlanır. Son güncelleme: ${formatLegalDate(cfg.updatedAt)}.`}
+        description={`Gizlilik politikası, kullanım koşulları, hesap silme ve KVKK aydınlatma sayfası. Kaydettiğiniz anda yayınlanır. Son güncelleme: ${formatLegalDate(cfg.updatedAt)}.`}
       />
       <Flash sp={sp} />
 
@@ -54,7 +56,7 @@ export default async function LegalAdminPage({ searchParams }: { searchParams: S
       </Panel>
 
       <form action={saveLegal} className="grid gap-5">
-        <Panel title="Şirket bilgileri" description="Üç sayfadaki yer tutucular bu bilgilerle doldurulur.">
+        <Panel title="Şirket bilgileri" description="Sayfalardaki yer tutucular bu bilgilerle doldurulur.">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Şirket unvanı (veri sorumlusu)" htmlFor="company" hint="Ticaret sicilindeki tam unvan, ör. '... Bilişim Ltd. Şti.'">
               <input id="company" name="company" defaultValue={cfg.company} required className={inputCls} />
@@ -77,6 +79,7 @@ export default async function LegalAdminPage({ searchParams }: { searchParams: S
               <li key={t}>
                 <code className="rounded bg-sunken px-1 py-0.5 font-mono text-[12.5px]">{t}</code> <span className="text-muted">{label}</span>
                 {t === "{{saklama}}" && <span className="text-muted"> · şu an {kvkk.retentionDays}</span>}
+                {t === "{{yz_saglayicilar}}" && <span className="text-muted"> · şu an: {aiProviders}</span>}
               </li>
             ))}
           </ul>
@@ -87,20 +90,26 @@ export default async function LegalAdminPage({ searchParams }: { searchParams: S
         </Panel>
 
         {slugs.map((s) => (
-          <Panel
-            key={s}
-            title={LEGAL_PAGES[s].title}
-            actions={
-              <a href={LEGAL_PAGES[s].path} target="_blank" className="inline-flex items-center gap-1 text-sm text-accent hover:underline">
-                Sayfayı aç <ExternalLink className="size-3.5" />
-              </a>
-            }
-          >
-            <textarea name={s} rows={16} defaultValue={cfg[s]} className={`${textareaCls} font-mono text-[13px] leading-relaxed`} aria-label={LEGAL_PAGES[s].title} />
-            <label className="mt-3 flex items-center gap-2.5 text-sm text-muted">
-              <input type="checkbox" name={`reset_${s}`} className={checkboxCls} /> Kaydederken bu sayfayı varsayılan metne döndür
-            </label>
-          </Panel>
+          <div key={s} className="grid gap-3">
+            {cfg[s] !== LEGAL_BODY_DEFAULTS[s] && (
+              <Notice tone="warn">
+                {LEGAL_PAGES[s].title}: kayıtlı metin güncel varsayılandan farklı. Mobil uygulama veri güncellemesini almak için “varsayılana döndür”ü işaretleyin ya da farkları elle aktarın.
+              </Notice>
+            )}
+            <Panel
+              title={LEGAL_PAGES[s].title}
+              actions={
+                <a href={LEGAL_PAGES[s].path} target="_blank" className="inline-flex items-center gap-1 text-sm text-accent hover:underline">
+                  Sayfayı aç <ExternalLink className="size-3.5" />
+                </a>
+              }
+            >
+              <textarea name={s} rows={16} defaultValue={cfg[s]} className={`${textareaCls} font-mono text-[13px] leading-relaxed`} aria-label={LEGAL_PAGES[s].title} />
+              <label className="mt-3 flex items-center gap-2.5 text-sm text-muted">
+                <input type="checkbox" name={`reset_${s}`} className={checkboxCls} /> Kaydederken bu sayfayı varsayılan metne döndür
+              </label>
+            </Panel>
+          </div>
         ))}
 
         <div className="flex justify-end">

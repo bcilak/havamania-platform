@@ -13,7 +13,7 @@ import { emptyExpect, EVAL_LIMITS } from "@/lib/eval";
 import { bool, done, fail, str, strStrict } from "@/lib/form";
 import { safeAdminPath } from "@/lib/form-limits";
 import { can } from "@/lib/roles";
-import { storage } from "@/lib/storage";
+import { deleteAttachmentFiles } from "@/lib/kvkk";
 
 const GAPS_BACK_RE = /^\/admin\/egitim\/bosluklar(\?[A-Za-z0-9=&%_.~-]*)?$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -32,10 +32,13 @@ export async function toggleFlag(fd: FormData) {
 export async function deleteConversation(fd: FormData) {
   const admin = await requireAdmin("kvkk");
   const id = str(fd, "id");
-  const photos = await db.select({ key: attachments.storageKey }).from(attachments).where(eq(attachments.conversationId, id));
-  await Promise.all(photos.map((p) => storage.remove(p.key).catch(() => {})));
-  await db.delete(conversations).where(eq(conversations.id, id));
-  await audit(admin, "conversation.delete", id, { photos: photos.length });
+  // Önce fotoğraf satırları kilitlenir, sonra dosyalar, sonra konuşma (geçiş betiğiyle yarışmasın).
+  const photos = await db.transaction(async (tx) => {
+    const files = await deleteAttachmentFiles(tx, eq(attachments.conversationId, id));
+    await tx.delete(conversations).where(eq(conversations.id, id));
+    return files.ids.length;
+  });
+  await audit(admin, "conversation.delete", id, { photos });
   done("/admin/konusmalar", "Konuşma ve fotoğrafları kalıcı olarak silindi.");
 }
 
@@ -49,6 +52,8 @@ export async function addCorrection(fd: FormData): Promise<SimilarState> {
   if (!question || !correct) fail(back, "Soru ve doğru cevap boş olamaz.");
   const [c] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!c) fail("/admin/konusmalar", "Konuşma bulunamadı.");
+  // Sağlık bilgisi içerebilen konuşmadan kalıcı kopya (düzeltme: yanlış cevap dahil) alınmaz.
+  if (c!.healthContext) fail(back, "Bu konuşma sağlık bilgisi içerebilir; düzeltme olarak kopyalanamaz.");
   const scope = str(fd, "scope") === "all" ? "all" : (c!.mode as ChatMode);
   if (!bool(fd, "force")) {
     const similar = await findSimilarQa({ botId: c!.botId, question, answer: correct, mode: scope });
@@ -85,10 +90,12 @@ export async function deletePhoto(fd: FormData) {
   const admin = await requireAdmin("kvkk");
   const id = str(fd, "id");
   const back = safeAdminPath(str(fd, "back"), "/admin/fotograflar");
-  const [a] = await db.select().from(attachments).where(eq(attachments.id, id));
-  if (!a) fail(back, "Fotoğraf bulunamadı.");
-  await storage.remove(a!.storageKey).catch(() => {});
-  await db.delete(attachments).where(eq(attachments.id, id));
+  const removed = await db.transaction(async (tx) => {
+    const files = await deleteAttachmentFiles(tx, eq(attachments.id, id));
+    if (files.ids.length) await tx.delete(attachments).where(eq(attachments.id, id));
+    return files.ids.length;
+  });
+  if (!removed) fail(back, "Fotoğraf bulunamadı.");
   await audit(admin, "photo.delete", id);
   revalidatePath(back.split("?")[0]);
   done(back, "Fotoğraf kalıcı olarak silindi.");
@@ -115,6 +122,8 @@ export async function addCaseFromMessage(fd: FormData) {
   if (!bool(fd, "piiOk")) fail(back, "Soruda kişisel veri olmadığını onaylamanız gerekir.");
   const [c] = await db.select().from(conversations).where(eq(conversations.id, conversationId));
   if (!c) fail("/admin/konusmalar", "Konuşma bulunamadı.");
+  // Sağlık bilgisi içerebilen konuşmadan senaryo kopyası alınmaz (senaryo saklama süresi ve silmeyle temizlenmez).
+  if (c!.healthContext) fail(back, "Bu konuşma sağlık bilgisi içerebilir; senaryo olarak kopyalanamaz.");
   const [answer] = await db.select().from(messages).where(and(eq(messages.id, messageId), eq(messages.conversationId, conversationId)));
   if (!answer) fail(back, "Mesaj bulunamadı.");
   // Sorunun geldiği kullanıcı mesajı: bu cevaptan önceki son kullanıcı mesajı.

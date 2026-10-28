@@ -237,13 +237,16 @@ export function ChatApp(props: Props) {
   }
   if (session.state === "consent") {
     return (
-      <div className="flex h-full flex-col justify-end p-4 sm:justify-center">
-        <div className="mx-auto w-full max-w-md rounded-2xl border border-line bg-surface p-5">
-          <h2 className="text-base font-semibold">Başlamadan önce</h2>
-          <p className="mt-2 text-sm leading-relaxed whitespace-pre-line text-muted">
-            <Linkify text={session.text} />
-          </p>
-          <div className="mt-4 flex gap-2">
+      <div className="flex h-full min-h-0 flex-col justify-end p-4 sm:justify-center">
+        {/* Uzun onay metni kendi içinde kayar; başlık ve düğmeler her zaman görünür kalır. */}
+        <div className="mx-auto flex max-h-full min-h-0 w-full max-w-md flex-col rounded-2xl border border-line bg-surface p-5">
+          <h2 className="shrink-0 text-base font-semibold">Başlamadan önce</h2>
+          <div className="mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <p className="text-sm leading-relaxed whitespace-pre-line text-muted">
+              <Linkify text={session.text} />
+            </p>
+          </div>
+          <div className="mt-4 flex shrink-0 gap-2">
             <button
               onClick={() => startSession(init, session.version)}
               className="h-11 flex-1 rounded-xl bg-accent text-[15px] font-medium text-white hover:bg-accent-hover"

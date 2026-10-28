@@ -98,3 +98,14 @@ export function piiText(pii: boolean, text: string): string {
 export function piiPayload(pii: boolean, value: unknown): unknown {
   return pii ? value : maskToolPayload(value);
 }
+
+/** Sağlık bilgisi içerebilen (konuşma `health_context` işaretli) bir konuşmanın içeriğini gizlediğimiz rollere gösterilen metin. */
+export const HEALTH_RESTRICTED_NOTICE = "Bu konuşma sağlık bilgisi içerebilir; içeriği görme yetkiniz yok.";
+
+/**
+ * Sağlık işaretli konuşmanın içeriği (mesaj, başlık, yorum, sorgu, araç girdisi) `pii` yetkisi olmayan rollerden gizlenir.
+ * Maskeleme yetmez: sağlık verisi serbest metin içinde tanınamaz. `pii` yetkisi olan roller içeriği görür.
+ */
+export function healthRestricted(pii: boolean, healthContext: boolean): boolean {
+  return !pii && healthContext;
+}

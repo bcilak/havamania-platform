@@ -41,6 +41,24 @@ export default async function KvkkPage({ searchParams }: { searchParams: SearchP
                 <input type="checkbox" name="bump" className={checkboxCls} /> Metin değişmese de kullanıcılardan yeniden onay iste
               </label>
               <p className="text-xs text-muted">Metni değiştirdiğinizde sürüm kendiliğinden artar ve herkes bir sonraki açılışta yeniden onaylar.</p>
+              <p className="text-xs text-muted">
+                Kullanılabilir: <code className="font-mono">{"{{saklama}} {{sirket}} {{site}}"}</code>. Mobil uygulama ve widget aynı metni ve sürümü kullanır.
+              </p>
+            </div>
+          </Panel>
+          <Panel
+            title="Sağlık verisi rızası (ayrı, isteğe bağlı)"
+            description={`Yalnızca mobil uygulamada, yukarıdaki onaydan ayrı ikinci bir onay kutusuyla gösterilir (widget sağlık verisi toplamaz). Şu anki sürüm: v${cfg.healthConsentVersion}.`}
+          >
+            <div className="grid gap-4">
+              <textarea name="healthConsentText" rows={6} defaultValue={cfg.healthConsentText} className={textareaCls} aria-label="Sağlık verisi rıza metni" />
+              <label className="flex items-center gap-2.5 text-sm">
+                <input type="checkbox" name="bumpHealth" className={checkboxCls} /> Metin değişmese de sağlık rızasını yeniden iste
+              </label>
+              <p className="text-xs text-muted">
+                Metni değiştirdiğinizde sağlık rızasının sürümü artar. Kullanıcı yeni sürümü onaylayana kadar sağlık hassasiyetleri asistana gönderilmez; asistan çalışmaya devam eder. Kullanılabilir:{" "}
+                <code className="font-mono">{"{{saklama}} {{sirket}} {{site}}"}</code>.
+              </p>
             </div>
           </Panel>
           <Panel title="Saklama süresi">

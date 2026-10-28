@@ -1,7 +1,7 @@
 /*
  * Yerel geliştirme için sahte servisler (port 3199):
  *   POST /v1/chat/completions   OpenAI uyumlu model: akış, araç çağırma, kullanım bilgisi
- *   GET  /__last-chat           Son model isteğinin max_tokens / max_completion_tokens değerleri (testler için)
+ *   GET  /__last-chat           Son model isteğinin max_tokens / max_completion_tokens değerleri ve system metni (testler için)
  *   POST /v1/embeddings         OpenAI biçiminde, kelime-hash tabanlı deterministik vektör
  *   GET  /v1/weather/current    Havamania veri API'si taklitleri
  *   GET  /v1/weather/forecast
@@ -12,6 +12,8 @@
  * Hata enjeksiyonu: veri API'sinde q (uçuşta origin) __500 / __timeout (10 sn bekler) /
  * __badjson ise ilgili hata üretilir. Sahte model, kullanıcı mesajında "#arac:<ad>:<q>"
  * görürse o aracı o konumla çağırır (q boşsa konumsuz; örn. "#arac:current_weather:__500").
+ * Model hatası enjeksiyonu (akışsız yol, mobil köprü testleri): kullanıcı mesajında __MODEL_500
+ * geçerse sahte model 500 döner; __MODEL_SLOW geçerse 60 sn bekler (bağlantı kapanınca erken çıkar).
  *   node scripts/mock-services.mjs
  */
 import http from "node:http";
@@ -135,6 +137,18 @@ http
     const userText = textOf(lastUser?.content);
     const hasImage = Array.isArray(lastUser?.content) && lastUser.content.some((p) => p.type === "image_url");
     const system = textOf(msgs.find((m) => m.role === "system")?.content);
+    lastChat.system = system;
+    // Hata enjeksiyonu (yalnızca yerel test servisi): sağlayıcı 500 verir ya da çok yavaş cevaplar.
+    if (/__MODEL_500/.test(userText)) {
+      res.writeHead(500, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: { message: "sahte model hatası", type: "server_error" } }));
+    }
+    if (/__MODEL_SLOW/.test(userText)) {
+      let gone = false;
+      res.on("close", () => (gone = true));
+      for (let i = 0; i < 600 && !gone; i++) await sleep(100);
+      if (gone) return;
+    }
     const usage = { prompt_tokens: 420 + Math.round(system.length / 4), completion_tokens: 0, total_tokens: 0 };
 
     let toolCall = null;

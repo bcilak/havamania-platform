@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { maskPii, maskToolPayload, piiPayload, piiText } from "./pii-mask";
+import { HEALTH_RESTRICTED_NOTICE, healthRestricted, maskPii, maskToolPayload, piiPayload, piiText } from "./pii-mask";
 
 describe("maskPii", () => {
   it("telefon, e-posta ve uzun numaraları maskeler, kısa sayıları bırakır", () => {
@@ -78,5 +78,15 @@ describe("maskToolPayload", () => {
     assert.equal(piiText(false, "0532 123 45 67"), "••••");
     assert.equal(piiPayload(true, payload), payload);
     assert.notEqual(piiPayload(false, payload), payload);
+  });
+});
+
+describe("healthRestricted", () => {
+  it("yalnızca pii yetkisi olmayan rol ve sağlık işaretli konuşmada kısıtlar", () => {
+    assert.equal(healthRestricted(false, true), true);
+    assert.equal(healthRestricted(true, true), false);
+    assert.equal(healthRestricted(false, false), false);
+    assert.equal(healthRestricted(true, false), false);
+    assert.equal(HEALTH_RESTRICTED_NOTICE, "Bu konuşma sağlık bilgisi içerebilir; içeriği görme yetkiniz yok.");
   });
 });

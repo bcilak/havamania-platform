@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { settings } from "@/db/schema";
 import type { ToolId } from "./bot-config";
+import { KVKK_DEFAULTS } from "./kvkk-defaults";
 import { LEGAL_DEFAULTS, type LegalSettings } from "./legal";
 
 export type IntegrationSettings = {
@@ -21,6 +22,14 @@ export type KvkkSettings = {
   retentionDays: number;
   consentVersion: number;
   consentText: string;
+  /** Onay metni/sürümü en son ne zaman değişti (ISO). Kayıtlı değer yoksa `/consent` ayarın kayıt tarihine döner. */
+  consentUpdatedAt: string | null;
+  /**
+   * Sağlık verisi (özel nitelikli, KVKK m. 6) için AYRI açık rıza metni ve sürümü. Yalnızca mobil uygulama kullanır
+   * (widget sağlık verisi toplamaz). Sürüm, metin değişince artar. Şema değişikliği gerekmez (ayar JSON'u).
+   */
+  healthConsentText: string;
+  healthConsentVersion: number;
   lastCleanupAt: string | null;
 };
 
@@ -45,13 +54,7 @@ const DEFAULTS: SettingsMap = {
     timeoutMs: 8000,
   },
   embedding: { providerId: null, model: null },
-  kvkk: {
-    retentionDays: 180,
-    consentVersion: 1,
-    consentText:
-      "Havamania Asistan ile yaptığınız yazışmalar ve gönderdiğiniz fotoğraflar, size cevap verebilmek ve hizmeti iyileştirmek amacıyla Altıkod Digital Solutions tarafından işlenir ve en fazla 180 gün saklanır. Cevap üretmek için mesajlarınız yurt dışında bulunan yapay zekâ hizmet sağlayıcılarına aktarılabilir. Devam ederek bu işlemeye açık rıza vermiş olursunuz.",
-    lastCleanupAt: null,
-  },
+  kvkk: KVKK_DEFAULTS,
   legal: LEGAL_DEFAULTS,
 };
 
