@@ -374,7 +374,8 @@ export async function prepareTurn(input: ChatInput): Promise<PreparedTurn> {
       embeddingTokens = found.usage.embeddingTokens;
       embeddingCostUsd = embeddingCostOf(embeddingTokens, found.usage.embeddingPricePer1M);
     } catch (e) {
-      console.error("[chat] bilgi tabanı araması başarısız:", e);
+      // Ham hata nesnesi (AI SDK APICallError.requestBodyValues) kullanıcı metnini taşıyabilir; yalnızca sınıf/durum loglanır.
+      console.error("[chat] bilgi tabanı araması başarısız:", describeError(e));
     }
   }
 

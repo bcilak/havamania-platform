@@ -358,6 +358,35 @@ check("Site haritasında /kvkk", sitemap.includes("/kvkk</loc>"), "");
       check(`Köprü: /ask ${label} → ${status} ${error}`, r.status === status && j.error === error && typeof j.message === "string", `${r.status} ${j.error}`);
     }
 
+    /* Yeni isteğe bağlı alanlar: request_id, personalization, context.weather_data (hepsi model çağrısından önce reddedilir) */
+    const wd = (over: Record<string, unknown> = {}) => ({ observed_at: "2026-10-28T14:30:00+03:00", timezone: "Europe/Istanbul", ...over });
+    const forecastOf = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ date: new Date(Date.UTC(2026, 9, 28 + i)).toISOString().slice(0, 10), min_c: 10, max_c: 19, condition: "güneşli", precip_prob_pct: 10 }));
+    const fieldCases: [string, unknown, number, string, string | null][] = [
+      ["request_id: abc", q({ request_id: "abc" }), 400, "invalid_request", "request_id"],
+      ["personalization: 'hayır'", q({ personalization: "hayır" }), 400, "invalid_request", "personalization"],
+      ["weather_data.observed_at offset'siz", q({ context: { weather_data: wd({ observed_at: "2026-10-28T14:30:00" }) } }), 400, "invalid_request", "context.weather_data.observed_at"],
+      ["weather_data.timezone Mars/Olympus", q({ context: { weather_data: wd({ timezone: "Mars/Olympus" }) } }), 400, "invalid_request", "context.weather_data.timezone"],
+      ["weather_data.current.humidity_pct 150", q({ context: { weather_data: wd({ current: { humidity_pct: 150 } }) } }), 400, "invalid_request", null],
+      ["weather_data.forecast tarih tekrarı", q({ context: { weather_data: wd({ forecast: [...forecastOf(2), forecastOf(1)[0]] }) } }), 400, "invalid_request", "context.weather_data.forecast"],
+      ["weather_data.forecast boşluklu tarih (gün atlanmış)", q({ context: { weather_data: wd({ forecast: [forecastOf(3)[0], forecastOf(3)[2]] }) } }), 400, "invalid_request", "context.weather_data.forecast"],
+      ["weather_data.forecast 11 gün", q({ context: { weather_data: wd({ forecast: forecastOf(11) }) } }), 413, "too_large", null],
+      ["weather_data condition 101 karakter", q({ context: { weather_data: wd({ current: { condition: "c".repeat(101) } }) } }), 413, "too_large", null],
+    ];
+    for (const [label, body, status, error, field] of fieldCases) {
+      const r = await brPost("/ask", keyMain, body);
+      const j = await json(r);
+      check(
+        `Köprü: /ask ${label} → ${status} ${error}${field ? ` (field=${field})` : ""}`,
+        r.status === status && j.error === error && typeof j.message === "string" && (field === null || j.field === field) && (field !== null || status === 413 || String(j.field ?? "").startsWith("context.weather_data")),
+        `${r.status} ${j.error} ${j.field ?? ""}`,
+      );
+    }
+    // Geçerli request_id + geçerli (boş) weather_data biçimi şema aşamasını geçer: 428 (onay sürümü yanlış) model/kayıt öncesi döner.
+    const okShape = await brPost("/ask", keyMain, q({ consent_version: cv > 1 ? cv - 1 : cv + 1, request_id: crypto.randomUUID(), personalization: false, context: { weather_data: wd({ forecast: forecastOf(10), location: { name: "Ankara", lat: 39.92512, lon: 32.83687 } }) } }));
+    await okShape.body?.cancel();
+    check("Köprü: geçerli request_id / personalization / weather_data (10 gün, lat/lon) şemayı geçer (yalnızca onay sürümüne takılır, 428)", okShape.status === 428, `${okShape.status}`);
+
     /* Onay sürümü: eski sürümle 428, kullanıcı kaydı oluşmaz */
     const oldV = cv > 1 ? cv - 1 : cv + 1;
     const r428 = await brPost("/ask", keyMain, { user_id: extIds.old, question: "Merhaba", consent_version: oldV });

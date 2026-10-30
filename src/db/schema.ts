@@ -251,6 +251,33 @@ export const bridgeUsage = pgTable(
   (t) => [primaryKey({ columns: [t.botId, t.day] })],
 );
 
+export type BridgeRequestStatus = "in_progress" | "completed" | "failed";
+
+/**
+ * Köprü yineleme koruması (`request_id`): kullanıcı + istek kimliği başına bir satır. Kişisel içerik tutmaz;
+ * soru ve bağlam yerine yalnızca anahtarlı HMAC parmak izi (`body_hash`), durum ve kimlikler saklanır.
+ * Kullanıcı silinince cascade ile gider; ayrıca saklama temizliği (cron) 24 saatten eski satırları siler.
+ * `attempt_id` her sahiplenmede değişir: bayat bir çalışma sonradan gelip başkasının satırını ezemez.
+ * `conversation_id`/`message_id` bilerek FK değil: konuşma saklama/yönetici silmesiyle gidebilir (tekrar sırasında mesaj yoksa yeniden işlenir).
+ */
+export const bridgeRequests = pgTable(
+  "bridge_requests",
+  {
+    appUserId: uuid("app_user_id")
+      .references(() => appUsers.id, { onDelete: "cascade" })
+      .notNull(),
+    requestId: uuid("request_id").notNull(),
+    bodyHash: text("body_hash").notNull(),
+    attemptId: uuid("attempt_id").notNull(),
+    status: text("status").$type<BridgeRequestStatus>().notNull(),
+    conversationId: uuid("conversation_id"),
+    messageId: uuid("message_id"),
+    createdAt: created(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.appUserId, t.requestId] }), index("bridge_requests_created_idx").on(t.createdAt)],
+);
+
 /* ---------- Bilgi tabanı ---------- */
 
 export const kbSources = pgTable(

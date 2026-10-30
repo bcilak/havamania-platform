@@ -1,6 +1,7 @@
 import { embedMany } from "ai";
 import { embeddingCostOf } from "./embedding-cost";
 import { resolveEmbedding } from "./providers";
+import { describeError } from "./turn-core";
 
 /** Boşluk analizinde bir sayfa açılışında en fazla bu kadar metin vektörlenir (maliyet sınırı). */
 export const GAP_EMBED_MAX = 300;
@@ -20,7 +21,7 @@ export async function embedGapTexts(texts: string[]): Promise<{ vectors: (number
     const tokens = usage?.tokens ?? 0;
     return { vectors: texts.map((_, i) => embeddings[i] ?? null), model: emb.id, tokens, costUsd: embeddingCostOf(tokens, emb.pricePer1M) };
   } catch (e) {
-    console.error("[gaps] embedding başarısız, sözcüksel gruplamayla devam:", e);
+    console.error("[gaps] embedding başarısız, sözcüksel gruplamayla devam:", describeError(e));
     return null;
   }
 }

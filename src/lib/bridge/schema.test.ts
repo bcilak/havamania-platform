@@ -209,6 +209,290 @@ describe("ask: sağlık rızası alanları ve null değerler", () => {
   });
 });
 
+describe("ask: request_id ve personalization", () => {
+  const field = (r: ReturnType<typeof ask>) => (r.ok ? undefined : r.field);
+
+  it("request_id geçerli UUID ve null geçer; küçük harfe çevrilir", () => {
+    assert.equal(code(ask({ request_id: UUID })), "ok");
+    assert.equal(code(ask({ request_id: null })), "ok");
+    const r = ask({ request_id: UUID.toUpperCase() });
+    assert.ok(r.ok && r.value.request_id === UUID);
+    const none = ask();
+    assert.ok(none.ok && none.value.request_id === undefined);
+  });
+
+  it("geçersiz request_id 400 ve field=request_id", () => {
+    for (const bad of ["abc", "", 5]) {
+      const r = ask({ request_id: bad });
+      assert.equal(code(r), "invalid_request", String(bad));
+      assert.equal(field(r), "request_id");
+    }
+  });
+
+  it("personalization boolean ya da null; başka tür 400", () => {
+    assert.equal(code(ask({ personalization: true })), "ok");
+    assert.equal(code(ask({ personalization: false })), "ok");
+    assert.equal(code(ask({ personalization: null })), "ok");
+    const r = ask({ personalization: "no" });
+    assert.equal(code(r), "invalid_request");
+    assert.equal(field(r), "personalization");
+  });
+});
+
+describe("ask: context.weather_data", () => {
+  const L = BRIDGE_LIMITS;
+  const wd = (extra: Record<string, unknown> = {}) => ({ observed_at: "2026-10-28T14:30:00+03:00", timezone: "Europe/Istanbul", ...extra });
+  const askW = (extra: Record<string, unknown> = {}) => ask({ context: { weather_data: wd(extra) } });
+  const days = (n: number) => Array.from({ length: n }, (_, i) => ({ date: `2026-11-${String(i + 1).padStart(2, "0")}`, min_c: 5, max_c: 12 }));
+  const fieldOf = (r: ReturnType<typeof ask>) => (r.ok ? undefined : r.field);
+
+  it("yalnızca zorunlu alanlarla geçer; tam sözleşme örneği geçer", () => {
+    assert.equal(code(askW()), "ok");
+    const full = askW({
+      location: { name: "Ankara" },
+      current: { temp_c: 18.5, feels_like_c: 16, condition: "parçalı bulutlu", humidity_pct: 60, wind_kmh: 12, precip_mm: 0 },
+      forecast: [{ date: "2026-10-28", min_c: 10, max_c: 19, condition: "güneşli", precip_prob_pct: 10 }],
+      stale: false,
+      source: "MGM",
+    });
+    assert.equal(code(full), "ok");
+    assert.equal(code(ask({ context: { weather_data: null } })), "ok");
+  });
+
+  it("null alanlar kabul edilir", () => {
+    const r = askW({
+      location: null,
+      current: { temp_c: null, feels_like_c: null, condition: null, humidity_pct: null, wind_kmh: null, precip_mm: null },
+      forecast: [{ date: "2026-10-28", min_c: null, max_c: null, condition: null, precip_prob_pct: null }],
+      stale: null,
+      source: null,
+    });
+    assert.equal(code(r), "ok");
+  });
+
+  it("observed_at: offset'siz, tarihsiz ve geçersiz değerler 400", () => {
+    for (const bad of ["2026-10-28T14:30:00", "2026-10-28", "2026-10-28 14:30:00+03:00", "2026-02-30T10:00:00Z", "2026-10-28T25:00:00Z", "2026-10-28T10:60:00Z", "2026-10-28T10:00:00+24:00", "dün", ""]) {
+      const r = askW({ observed_at: bad });
+      assert.equal(code(r), "invalid_request", bad);
+      assert.equal(fieldOf(r), "context.weather_data.observed_at", bad);
+    }
+    for (const good of ["2026-10-28T14:30Z", "2026-10-28T14:30:15Z", "2026-10-28T14:30:15.123+03:00", "2026-10-28T14:30:00-05:30"]) {
+      assert.equal(code(askW({ observed_at: good })), "ok", good);
+    }
+    assert.equal(fieldOf(ask({ context: { weather_data: { timezone: "UTC" } } })), "context.weather_data.observed_at");
+  });
+
+  it("timezone: bilinmeyen ya da biçimsiz ad 400", () => {
+    for (const bad of ["Mars/Olympus", "", "Europe/Istanbul; drop", "+03:00", "a".repeat(65), "Europe/Istanbul\n"]) {
+      const r = askW({ timezone: bad });
+      assert.equal(code(r), "invalid_request", JSON.stringify(bad));
+      assert.equal(fieldOf(r), "context.weather_data.timezone");
+    }
+    for (const good of ["Europe/Istanbul", "UTC", "America/Argentina/Buenos_Aires"]) assert.equal(code(askW({ timezone: good })), "ok", good);
+  });
+
+  it("sayı aralıkları 400: sınırda geçer, dışında hata", () => {
+    const cur = (o: Record<string, unknown>) => askW({ current: o });
+    for (const [k, min, max] of [
+      ["temp_c", -90, 60],
+      ["feels_like_c", -90, 70],
+      ["humidity_pct", 0, 100],
+      ["wind_kmh", 0, 500],
+      ["precip_mm", 0, 2000],
+    ] as const) {
+      assert.equal(code(cur({ [k]: min })), "ok", k);
+      assert.equal(code(cur({ [k]: max })), "ok", k);
+      const lo = cur({ [k]: min - 0.5 });
+      const hi = cur({ [k]: max + 0.5 });
+      assert.equal(code(lo), "invalid_request", k);
+      assert.equal(code(hi), "invalid_request", k);
+      assert.equal(fieldOf(hi), `context.weather_data.current.${k}`);
+    }
+    assert.equal(fieldOf(cur({ humidity_pct: 150 })), "context.weather_data.current.humidity_pct");
+    assert.equal(code(cur({ temp_c: "18" })), "invalid_request");
+    const day = (o: Record<string, unknown>) => askW({ forecast: [{ date: "2026-10-28", ...o }] });
+    assert.equal(code(day({ precip_prob_pct: 101 })), "invalid_request");
+    assert.equal(code(day({ min_c: -91 })), "invalid_request");
+    assert.equal(code(day({ max_c: 71 })), "invalid_request");
+  });
+
+  it("forecast.date: geçersiz takvim günü ve biçim 400; tekrarlı tarih 400 (field=forecast)", () => {
+    for (const bad of ["2026-02-30", "2026-13-01", "28.10.2026", "2026-10-28T00:00:00Z", ""]) {
+      assert.equal(code(askW({ forecast: [{ date: bad }] })), "invalid_request", bad);
+    }
+    assert.equal(fieldOf(askW({ forecast: [{ date: "2026-02-30" }] })), "context.weather_data.forecast.0.date");
+    assert.equal(code(askW({ forecast: [{ date: "2028-02-29" }] })), "ok");
+    const dup = askW({ forecast: [{ date: "2026-10-28" }, { date: "2026-10-29" }, { date: "2026-10-28" }] });
+    assert.equal(code(dup), "invalid_request");
+    assert.equal(fieldOf(dup), "context.weather_data.forecast");
+  });
+
+  it("forecast: boşluklu tarih 400 (field=forecast); ay/yıl sınırı ve artık gün ardışık sayılır", () => {
+    const gap = askW({ forecast: [{ date: "2026-10-28" }, { date: "2026-10-30" }] });
+    assert.equal(code(gap), "invalid_request");
+    assert.equal(fieldOf(gap), "context.weather_data.forecast");
+    // Sırasız gönderimde de boşluk yakalanır; tek gün ve ardışık günler geçer.
+    assert.equal(code(askW({ forecast: [{ date: "2026-10-31" }, { date: "2026-10-28" }, { date: "2026-10-30" }] })), "invalid_request");
+    assert.equal(code(askW({ forecast: [{ date: "2026-10-28" }] })), "ok");
+    assert.equal(code(askW({ forecast: [{ date: "2026-10-31" }, { date: "2026-11-01" }] })), "ok");
+    assert.equal(code(askW({ forecast: [{ date: "2026-12-31" }, { date: "2027-01-01" }] })), "ok");
+    assert.equal(code(askW({ forecast: [{ date: "2028-02-28" }, { date: "2028-02-29" }, { date: "2028-03-01" }] })), "ok");
+    assert.equal(code(askW({ forecast: [{ date: "2026-02-28" }, { date: "2026-03-01" }] })), "ok");
+    // Geçersiz tarih hâlâ öğe yolunda raporlanır (boşluk denetimi onu atlar).
+    assert.equal(fieldOf(askW({ forecast: [{ date: "2026-10-28" }, { date: "2026-02-30" }] })), "context.weather_data.forecast.1.date");
+  });
+
+  it("forecast: ardışık ama sırasız gönderim kabul edilir ve sıralı çıkar", () => {
+    const r = askW({ forecast: [{ date: "2026-10-30", max_c: 3 }, { date: "2026-10-28", max_c: 1 }, { date: "2026-10-29", max_c: 2 }] });
+    assert.equal(code(r), "ok");
+    if (!r.ok) return;
+    assert.deepEqual(
+      toClientContext(r.value.context, { health: false })?.weatherData?.forecast?.map((d) => d.date),
+      ["2026-10-28", "2026-10-29", "2026-10-30"],
+    );
+  });
+
+  it("location.name zorunlu ve boş olamaz; stale boolean olmalı", () => {
+    assert.equal(code(askW({ location: {} })), "invalid_request");
+    assert.equal(code(askW({ location: { name: "" } })), "invalid_request");
+    assert.equal(code(askW({ stale: "evet" })), "invalid_request");
+    assert.equal(code(ask({ context: { weather_data: "x" } })), "invalid_request");
+  });
+
+  it("forecast: 10 gün geçer, 11 gün too_large", () => {
+    assert.equal(code(askW({ forecast: days(L.forecastDays) })), "ok");
+    assert.equal(code(askW({ forecast: days(L.forecastDays + 1) })), "too_large");
+  });
+
+  it("metin alanları: 100 karakter geçer, 101 too_large", () => {
+    const at = (n: number) => "a".repeat(n);
+    const cases: Record<string, (s: string) => Record<string, unknown>> = {
+      "current.condition": (s) => ({ current: { condition: s } }),
+      "forecast.condition": (s) => ({ forecast: [{ date: "2026-10-28", condition: s }] }),
+      "location.name": (s) => ({ location: { name: s } }),
+      source: (s) => ({ source: s }),
+    };
+    for (const [name, mk] of Object.entries(cases)) {
+      assert.equal(code(askW(mk(at(L.weatherText)))), "ok", name);
+      assert.equal(code(askW(mk(at(L.weatherText + 1)))), "too_large", name);
+    }
+  });
+
+  it("weather_data bayt bütçesi: tam 4096 geçer, 4097 too_large", () => {
+    const euro = "€"; // 3 bayt
+    const build = (source: string) => ({
+      location: { name: "Ankara" },
+      current: { condition: euro.repeat(100) },
+      forecast: Array.from({ length: 10 }, (_, i) => ({ date: `2026-11-${String(i + 1).padStart(2, "0")}`, condition: euro.repeat(100) })),
+      source,
+    });
+    const bytes = (source: string) => Buffer.byteLength(JSON.stringify(wd(build(source))));
+    const need = L.weatherDataBytes - bytes("");
+    assert.ok(need >= 0 && need <= 3 * L.weatherText, String(need));
+    // `need` bayt: 100 karakter sınırı içinde ASCII (1 bayt), "ş" (2) ve "€" (3) karışımı.
+    const extra = Math.max(0, need - 100);
+    const make = (n: number) => (n <= 100 ? "a".repeat(n) : "a".repeat(100 - Math.ceil(extra / 2)) + euro.repeat(Math.floor(extra / 2)) + "ş".repeat(extra % 2));
+    const exact = make(need);
+    assert.ok(exact.length <= L.weatherText);
+    assert.equal(bytes(exact), L.weatherDataBytes);
+    assert.equal(code(askW(build(exact))), "ok");
+    assert.equal(code(askW(build(`${exact}a`))), "too_large");
+  });
+
+  it("weather_data eski 8192 baytlık bağlam bütçesine girmez", () => {
+    const fixed = Buffer.byteLength(JSON.stringify({ city: "", weather: "", trips: "" }));
+    const cityBytes = L.contextBytes - fixed - 2 * 2 * L.weather;
+    const city = "ş".repeat(Math.floor(cityBytes / 2)) + (cityBytes % 2 ? "a" : "");
+    const legacy = { city, weather: "ş".repeat(L.weather), trips: "ş".repeat(L.trips) };
+    assert.equal(Buffer.byteLength(JSON.stringify(legacy)), L.contextBytes);
+    assert.equal(code(ask({ context: legacy })), "ok");
+    assert.equal(code(ask({ context: { ...legacy, weather_data: wd({ forecast: days(10), current: { condition: "güneşli" } }) } })), "ok");
+    assert.equal(code(ask({ context: { ...legacy, city: `${city}a`, weather_data: wd() } })), "too_large");
+  });
+
+  it("lat/lon (konum ve kök) çıktıda yok", () => {
+    const r = askW({ location: { name: "Ankara", lat: 39.92512, lon: 32.8 }, lat: 39.9, lon: 32.8 });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.deepEqual(r.value.context?.weather_data?.location, { name: "Ankara" });
+    assert.ok(!JSON.stringify(r.value).includes("39.9"));
+    assert.ok(!JSON.stringify(toClientContext(r.value.context, { health: false })).includes("39.9"));
+  });
+});
+
+describe("toClientContext: personal ve weatherData", () => {
+  const parsed = () => {
+    const r = ask({
+      context: {
+        city: "Ankara",
+        weather: "güneşli",
+        trips: "Antalya 3 gün",
+        profile: { interest: "bağ", health_sensitivities: "polen" },
+        weather_data: {
+          observed_at: "2026-10-28T14:30:00+03:00",
+          timezone: "Europe/Istanbul",
+          location: { name: "Ankara" },
+          current: { temp_c: 18.5, condition: "açık", humidity_pct: null },
+          forecast: [
+            { date: "2026-10-30", max_c: 20, min_c: null },
+            { date: "2026-10-29", min_c: 8, condition: "yağmurlu", precip_prob_pct: 70 },
+          ],
+          stale: null,
+          source: "MGM",
+        },
+      },
+    });
+    assert.ok(r.ok);
+    return r.ok ? r.value.context : undefined;
+  };
+
+  it("personal: false -> profile ve trips yok; city, weather, weatherData var", () => {
+    const out = toClientContext(parsed(), { health: true, personal: false });
+    assert.equal(out?.profile, undefined);
+    assert.equal(out?.trips, undefined);
+    assert.equal(out?.city, "Ankara");
+    assert.equal(out?.weather, "güneşli");
+    assert.ok(out?.weatherData);
+    const json = JSON.stringify(out);
+    assert.ok(!json.includes("polen") && !json.includes("Antalya") && !json.includes("bağ"));
+  });
+
+  it("personal verilmezse ya da true ise eski sonuç", () => {
+    for (const out of [toClientContext(parsed(), { health: true }), toClientContext(parsed(), { health: true, personal: true })]) {
+      assert.equal(out?.trips, "Antalya 3 gün");
+      assert.equal(out?.profile?.health_sensitivities, "polen");
+    }
+  });
+
+  it("weatherData camelCase, null'lar atılmış, tahmin tarihe göre sıralı", () => {
+    assert.deepEqual(toClientContext(parsed(), { health: false })?.weatherData, {
+      observedAt: "2026-10-28T14:30:00+03:00",
+      timezone: "Europe/Istanbul",
+      location: { name: "Ankara" },
+      current: { tempC: 18.5, condition: "açık" },
+      forecast: [
+        { date: "2026-10-29", minC: 8, condition: "yağmurlu", precipProbPct: 70 },
+        { date: "2026-10-30", maxC: 20 },
+      ],
+      source: "MGM",
+    });
+  });
+
+  it("weather_data yoksa ya da null ise çıktıda weatherData anahtarı yok", () => {
+    const a = ask({ context: { city: "Ankara", weather_data: null } });
+    assert.ok(a.ok);
+    if (!a.ok) return;
+    assert.ok(!("weatherData" in (toClientContext(a.value.context, { health: false }) ?? {})));
+  });
+
+  it("boş current ve forecast atlanır", () => {
+    const r = ask({ context: { weather_data: { observed_at: "2026-10-28T14:30Z", timezone: "UTC", current: { temp_c: null }, forecast: [] } } });
+    assert.ok(r.ok);
+    if (!r.ok) return;
+    assert.deepEqual(toClientContext(r.value.context, { health: false })?.weatherData, { observedAt: "2026-10-28T14:30Z", timezone: "UTC" });
+  });
+});
+
 describe("delete-user ve feedback şemaları", () => {
   it("delete-user: user_id kuralları aynı", () => {
     assert.equal(parseDeleteUser({ user_id: "u" }).ok, true);

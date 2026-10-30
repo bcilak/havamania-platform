@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ChatErrorCode } from "@/lib/ai/turn-core";
 import { ChatError } from "@/lib/ai/turn-core";
-import { BRIDGE_MESSAGES, BRIDGE_STATUS, bridgeError, fromChatError, type BridgeErrorCode } from "./errors";
+import { BRIDGE_MESSAGES, BRIDGE_STATUS, bridgeError, bridgeJson, fromChatError, type BridgeErrorCode } from "./errors";
 
 async function parts(res: Response) {
   return { status: res.status, body: (await res.json()) as Record<string, unknown>, headers: res.headers };
@@ -26,6 +26,9 @@ describe("bridgeError", () => {
       not_found: 404,
       mode_disabled: 409,
       conversation_conflict: 409,
+      request_in_progress: 409,
+      request_id_reused: 422,
+      user_deleted: 409,
       too_large: 413,
       consent_required: 428,
       rate_limited: 429,
@@ -54,6 +57,19 @@ describe("bridgeError", () => {
     assert.equal(c.headers.get("retry-after"), "8");
     const d = await parts(bridgeError("rate_limited", { retryAfter: 0 }));
     assert.equal(d.headers.get("retry-after"), "1");
+  });
+
+  it("request_in_progress 409 + Retry-After; request_id_reused 422; user_deleted 409", async () => {
+    const a = await parts(bridgeError("request_in_progress", { retryAfter: 3 }));
+    assert.equal(a.status, 409);
+    assert.equal(a.headers.get("retry-after"), "3");
+    assert.deepEqual(a.body, { error: "request_in_progress", message: BRIDGE_MESSAGES.request_in_progress });
+    const b = await parts(bridgeError("request_id_reused"));
+    assert.equal(b.status, 422);
+    assert.equal(b.headers.get("retry-after"), null);
+    const c = await parts(bridgeError("user_deleted"));
+    assert.equal(c.status, 409);
+    assert.equal(c.body.message, "Kullanıcı verileri silindi; bu istek tamamlanamadı.");
   });
 });
 
@@ -88,5 +104,18 @@ describe("fromChatError", () => {
     const r = await parts(fromChatError(new ChatError("x", 404)));
     assert.equal(r.status, 500);
     assert.equal(r.body.error, "internal_error");
+  });
+});
+
+describe("bridgeJson", () => {
+  it("ek başlıklar ortak başlıklara eklenir", () => {
+    const r = bridgeJson({ ok: true }, 200, { "idempotent-replayed": "true" });
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get("idempotent-replayed"), "true");
+    assert.equal(r.headers.get("cache-control"), "no-store");
+  });
+
+  it("ek başlık yoksa yalnızca ortak başlıklar vardır", () => {
+    assert.equal(bridgeJson({ ok: true }).headers.get("idempotent-replayed"), null);
   });
 });

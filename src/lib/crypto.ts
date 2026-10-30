@@ -43,7 +43,23 @@ export function randomToken(bytes = 24): string {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
-export function hmac(data: string, secret: string): string {
+const derivedCache = new Map<string, { raw: string; key: Buffer }>();
+
+/**
+ * `ENCRYPTION_KEY` baytlarından HKDF-SHA256 ile `info` etiketli alt anahtar (32 bayt). Ana anahtarı doğrudan başka
+ * amaçla (HMAC) kullanmak yerine amaç başına ayrı anahtar türetilir: biri sızsa ya da kötüye kullanılsa diğerleri etkilenmez.
+ * Anahtar eksik/bozuksa `encryptionKey()` gibi hata fırlatır. Sonuç `info` başına önbelleklenir (ortam değişkeni değişirse yenilenir).
+ */
+export function deriveKey(info: string): Buffer {
+  const raw = process.env.ENCRYPTION_KEY ?? "";
+  const cached = derivedCache.get(info);
+  if (cached && cached.raw === raw) return cached.key;
+  const key = Buffer.from(crypto.hkdfSync("sha256", encryptionKey(), Buffer.alloc(0), info, 32));
+  derivedCache.set(info, { raw, key });
+  return key;
+}
+
+export function hmac(data: string, secret: string | Buffer): string {
   return crypto.createHmac("sha256", secret).update(data).digest("base64url");
 }
 

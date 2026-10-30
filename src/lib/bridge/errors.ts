@@ -13,6 +13,9 @@ export type BridgeErrorCode =
   | "not_found"
   | "mode_disabled"
   | "conversation_conflict"
+  | "request_in_progress"
+  | "request_id_reused"
+  | "user_deleted"
   | "too_large"
   | "consent_required"
   | "rate_limited"
@@ -28,6 +31,9 @@ export const BRIDGE_STATUS: Record<BridgeErrorCode, number> = {
   not_found: 404,
   mode_disabled: 409,
   conversation_conflict: 409,
+  request_in_progress: 409,
+  request_id_reused: 422,
+  user_deleted: 409,
   too_large: 413,
   consent_required: 428,
   rate_limited: 429,
@@ -44,6 +50,9 @@ export const BRIDGE_MESSAGES: Record<BridgeErrorCode, string> = {
   not_found: "Kayıt bulunamadı.",
   mode_disabled: "Bu mod şu anda kapalı.",
   conversation_conflict: "Bu konuşma kullanılamıyor. Yeni bir konuşma başlatın.",
+  request_in_progress: "Bu istek hâlâ işleniyor. Biraz bekleyip aynı istekle tekrar deneyin.",
+  request_id_reused: "Bu istek kimliği farklı bir istek için kullanılmış.",
+  user_deleted: "Kullanıcı verileri silindi; bu istek tamamlanamadı.",
   too_large: "İstek çok büyük.",
   consent_required: "Devam etmek için güncel aydınlatma ve açık rıza metnini onaylamanız gerekiyor.",
   rate_limited: "Çok fazla istek gönderildi. Biraz bekleyip tekrar deneyin.",
@@ -57,7 +66,7 @@ export const BRIDGE_MESSAGES: Record<BridgeErrorCode, string> = {
 export type BridgeErrorExtra = {
   /** 400: hatalı alanın yolu (ör. `context.profile.interest`). */
   field?: string;
-  /** 429: `Retry-After` (saniye, en az 1). */
+  /** 429 ve 409 `request_in_progress`: `Retry-After` (saniye, en az 1). */
   retryAfter?: number;
   /** 428: güncel onay metni (`health`: ayrı sağlık rızası metni). */
   consent?: { version: number; text: string; health?: { version: number; text: string } };
@@ -75,9 +84,9 @@ export function bridgeError(code: BridgeErrorCode, extra: BridgeErrorExtra = {})
   return NextResponse.json(body, { status: BRIDGE_STATUS[code], headers });
 }
 
-/** Başarılı JSON yanıtı (ortak başlıklarla). */
-export function bridgeJson(body: unknown, status = 200): NextResponse {
-  return NextResponse.json(body, { status, headers: { ...BRIDGE_HEADERS } });
+/** Başarılı JSON yanıtı (ortak başlıklarla; `headers` ek başlıklar, ör. `idempotent-replayed`). */
+export function bridgeJson(body: unknown, status = 200, headers: Record<string, string> = {}): NextResponse {
+  return NextResponse.json(body, { status, headers: { ...BRIDGE_HEADERS, ...headers } });
 }
 
 /** Sohbet çekirdeğinin fırlattığı `ChatError`'u sözleşme koduna çevirir; bilinmeyen kod 500 olur. */

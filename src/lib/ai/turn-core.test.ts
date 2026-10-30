@@ -78,6 +78,23 @@ describe("iptal/zaman aşımı kullanımı", () => {
     assert.ok(!describeError(Object.assign(new Error(leak), { code: "has space TC 123" })).includes("TC"));
   });
 
+  it("describeError: AI SDK APICallError benzeri hatada istek gövdesi, URL ve yanıt gövdesi çıktıya girmez (log güvenliği)", () => {
+    const userText = "Ali Veli TC 12345678901 polen alerjim var";
+    const apiCallError = Object.assign(new Error(`Bad request: ${userText}`), {
+      name: "AI_APICallError",
+      url: "https://api.example.test/v1/embeddings?key=sk-secret",
+      requestBodyValues: { input: userText },
+      statusCode: 400,
+      responseHeaders: { authorization: "Bearer sk-secret" },
+      responseBody: `{"error":"${userText}"}`,
+    });
+    const out = describeError(apiCallError);
+    assert.equal(out, "Sağlayıcı hatası (HTTP 400)");
+    for (const leak of ["Ali", "TC", "polen", "sk-secret", "api.example", "Bearer"]) assert.ok(!out.includes(leak), leak);
+    // Durum kodu yoksa yalnızca genel sınıf.
+    assert.equal(describeError(Object.assign(new Error(userText), { name: "AI_APICallError", requestBodyValues: { input: userText } })), "Model hatası");
+  });
+
   it("describeEvalError: kendi ChatError mesajımız korunur, sağlayıcı/SDK hataları genel metne iner", () => {
     const own = "Bu mod için henüz bir yapay zekâ modeli seçilmedi.";
     assert.equal(describeEvalError(new ChatError(own, 503)), own);

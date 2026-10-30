@@ -192,10 +192,13 @@ Değişiklikler GitHub'a gönderildikten sonra sunucuda (`.env.production` ve y�
 
 ```bash
 cd /opt/havamania && git pull
-hm build
-hm run --rm tools npx drizzle-kit push    # "truncate" sorarsa HAYIR
-hm up -d app
+hm build app && hm build tools           # tools ayrı profilde: "hm build" onu derlemez
+hm run --rm tools npx drizzle-kit push --verbose    # "truncate" sorarsa HAYIR
+hm up -d app                              # çıktıda "Recreated"/"Started" görünmeli
+hm run --rm -e APP_URL=http://app:3000 tools npm run smoke:prod
 ```
+
+`tools` imajı derlenmezse şema güncellemesi ve betikler eski kodla çalışır (yeni tablolar oluşmaz, yeni betikler "Missing script" verir). `hm up -d app` yalnızca "Running" diyorsa uygulama eski imajla çalışıyordur: `hm build app` adımını kontrol edin.
 
 Bu sürümle gelenler (`bridge_keys` tablosu ekleme-yalnızca bir şema değişikliğidir; `--force` kullanmayın):
 

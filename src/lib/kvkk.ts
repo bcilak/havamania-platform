@@ -1,7 +1,8 @@
 import { and, eq, inArray, isNull, lt, sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
-import { appUsers, attachments, conversations, deletionRequests } from "@/db/schema";
+import { appUsers, attachments, bridgeRequests, conversations, deletionRequests } from "@/db/schema";
 import { isReservedDeviceId } from "@/lib/bridge/keys-core";
+import { REQUEST_STALE_MS } from "@/lib/bridge/request-id";
 import { storage } from "@/lib/storage";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -58,7 +59,7 @@ async function removeConversations(ids: string[]): Promise<{ conversations: numb
   return total;
 }
 
-/** Saklama süresi dolan konuşmaları ve fotoğraflarını kalıcı olarak siler. */
+/** Saklama süresi dolan konuşmaları ve fotoğraflarını kalıcı olarak siler; 24 saati geçen köprü `request_id` kayıtlarını da temizler. */
 export async function runRetentionCleanup(retentionDays: number) {
   const expired = await db
     .select({ id: conversations.id })
@@ -78,7 +79,28 @@ export async function runRetentionCleanup(retentionDays: number) {
       return ids.length;
     });
   }
-  return { ...res, orphans };
+  const requests = await purgeExpiredBridgeRequests();
+  return { ...res, orphans, requests };
+}
+
+/**
+ * Köprü `request_id` kayıtları (kişisel içerik yok, yalnızca özet): 24 saatlik geçerlilik süresi dolanlar silinir
+ * (kullanıcıdan bağımsız, genel çalışır). Silinen satır sayısını döndürür.
+ * İşlemdeki (bayat olmayan) satır silinmez: model çağrısı sürerken satır giderse aynı kimlikle gelen yeniden deneme
+ * yeni istek sayılıp modeli ikinci kez çağırırdı. Bayatlık süresi `REQUEST_STALE_MS` ile tutarlıdır (bkz. decideExisting).
+ */
+export async function purgeExpiredBridgeRequests(): Promise<number> {
+  return (
+    await db
+      .delete(bridgeRequests)
+      .where(
+        and(
+          lt(bridgeRequests.createdAt, sql`now() - interval '24 hours'`),
+          sql`(${bridgeRequests.status} <> 'in_progress' or ${bridgeRequests.updatedAt} < now() - make_interval(secs => ${REQUEST_STALE_MS / 1000}))`,
+        ),
+      )
+      .returning({ id: bridgeRequests.requestId })
+  ).length;
 }
 
 export async function countExpired(retentionDays: number): Promise<number> {

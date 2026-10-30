@@ -19,6 +19,7 @@ import {
   type RankedHit,
   type VecRow,
 } from "./retrieval-core";
+import { describeError } from "./turn-core";
 
 export type KnowledgeHit = {
   chunkId: string;
@@ -168,7 +169,7 @@ async function searchKnowledgeFull(opts: SearchOpts): Promise<{ ranked: RankedKn
           order by c.embedding <=> ${vec}::vector
           limit 20`;
       } catch (e) {
-        console.error("[retrieval] vektör araması başarısız, tam metinle devam:", e);
+        console.error("[retrieval] vektör araması başarısız, tam metinle devam:", describeError(e));
       }
     }
     return rankHits({ lexRows, vecRows, termCount: terms.length, minSimilarity });
@@ -239,7 +240,7 @@ export async function findSimilarQa(opts: {
         group by c.source_id`;
       for (const h of hits) vectorScores.set(h.source_id, h.similarity);
     } catch (e) {
-      console.error("[retrieval] tekrar kontrolünde vektör araması başarısız, soru karşılaştırmasıyla devam:", e);
+      console.error("[retrieval] tekrar kontrolünde vektör araması başarısız, soru karşılaştırmasıyla devam:", describeError(e));
     }
   }
   return findSimilar({
