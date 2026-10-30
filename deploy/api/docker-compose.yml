@@ -1,0 +1,75 @@
+# api.havamania.com — mobil backend (FastAPI) üretim kurulumu.
+# Kaynak kod: github.com/altikoddigitalsolutions/Havamania-MobileApp (backend/), sunucuda /opt/havamania-api/src.
+# Gizli değerler yalnızca sunucudaki /opt/havamania-api/.env dosyasında durur (şablon: env.example).
+#
+# Kullanım (alias, DEPLOY-API.md):
+#   alias hma='docker compose -f /opt/havamania/deploy/api/docker-compose.yml --env-file /opt/havamania-api/.env'
+name: havamania-api
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: havamania_api
+      POSTGRES_USER: havamania_api
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD .env içinde tanımlı olmalı}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U havamania_api -d havamania_api"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    # Port dışarı açılmaz; yalnızca iç ağdan erişilir.
+    networks: [internal]
+
+  api:
+    build:
+      context: /opt/havamania-api/src/backend
+    image: havamania-api:latest
+    restart: unless-stopped
+    env_file: /opt/havamania-api/.env
+    environment:
+      # Üretim kuralları yalnızca tam "production" değeriyle açılır (demo abonelik, CORS "*" vb. kapanır).
+      APP_ENV: production
+      DEBUG: "false"
+      DATABASE_URL: postgresql+psycopg://havamania_api:${POSTGRES_PASSWORD}@db:5432/havamania_api
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-admin.json
+    # Apache yalnızca 127.0.0.1:8010 üzerinden bağlanır; docker-proxy bağlantıyı ağ geçidi adresinden (172.31.250.1)
+    # getirir. Yalnızca o adrese güvenilir: uvicorn istemci IP'sini X-Forwarded-For'un Apache'nin eklediği en sağ
+    # değerinden alır, böylece hız sınırı kullanıcı başına çalışır ve başlık sahteciliği işe yaramaz.
+    command:
+      - uvicorn
+      - app.main:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --proxy-headers
+      - --forwarded-allow-ips=172.31.250.1
+      - --timeout-keep-alive=75
+    ports:
+      - "127.0.0.1:8010:8000"
+    volumes:
+      - avatars:/app/static/avatars
+      - /opt/havamania-api/firebase-admin.json:/run/secrets/firebase-admin.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks: [internal]
+
+networks:
+  internal:
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+          gateway: 172.31.250.1
+
+volumes:
+  pgdata:
+  avatars:
