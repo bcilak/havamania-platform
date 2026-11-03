@@ -7,6 +7,8 @@ import fs from "node:fs";
 import { SignJWT } from "jose";
 import postgres from "postgres";
 import { hashBridgeKey } from "../src/lib/bridge/keys-core";
+import { coerce } from "../src/lib/cms/coerce";
+import type { LandingContent } from "../src/lib/cms/schema";
 
 const BASE = (process.env.APP_URL || "http://localhost:3110").replace(/\/$/, "");
 const sql = postgres(process.env.DATABASE_URL!, { max: 1 });
@@ -94,6 +96,43 @@ await act("/admin/icerik", "saveSection", sceneFields(original));
 await act("/admin/icerik", "publishLanding", {});
 const home2 = await (await fetch(BASE + "/")).text();
 check("CMS: geri alındı", home2.includes(original.captions[0].title) && !home2.includes("— test."), "");
+
+/* ---------- 1b. CMS 2: enerji bölümü (liste alanları, hata etiketi, yayın) ---------- */
+type Energy = LandingContent["energy"];
+function energyFields(en: Energy): Record<string, string> {
+  const f: Record<string, string> = { section: "enerji" };
+  for (const k of ["badge", "title", "text", "ctaLabel"] as const) f[`energy.${k}`] = en[k];
+  for (const card of ["solar", "wind"] as const) {
+    for (const k of ["icon", "title", "text"] as const) f[`energy.${card}.${k}`] = en[card][k];
+    for (const list of ["data", "uses", "benefits"] as const) {
+      for (let i = 0; i < 6; i++) f[`energy.${card}.${list}.${i}`] = en[card][list][i] ?? "";
+    }
+  }
+  return f;
+}
+// Ham satır eski biçimde olabilir; sunucudaki gibi coerce edilmiş hâliyle çalışılır.
+const [doc2] = await sql`select draft from cms_documents where id = 'landing'`;
+const energyOriginal = coerce(doc2.draft).energy;
+
+const energyEdited = structuredClone(energyOriginal);
+energyEdited.solar.title = "Solar — test";
+loc = await act("/admin/icerik", "saveSection", energyFields(energyEdited));
+const [afterEnergy] = await sql`select draft from cms_documents where id = 'landing'`;
+check("CMS 2: enerji taslağa kaydedildi", loc.includes("ok=") && afterEnergy.draft.energy?.solar?.title === "Solar — test", loc);
+
+loc = await act("/admin/icerik", "publishLanding", {});
+const homeEnergy = await (await fetch(BASE + "/")).text();
+check("CMS 2: yayınlanan Solar başlığı sitede", loc.includes("ok=") && homeEnergy.includes("Solar — test"), loc);
+
+const energyTooLong = structuredClone(energyOriginal);
+energyTooLong.solar.data[0] = "x".repeat(61);
+loc = await act("/admin/icerik", "saveSection", energyFields(energyTooLong));
+check("CMS 2: çok uzun liste maddesi okunur etiketle reddedildi", loc.includes("hata=Enerji › Solar › analiz edilen veriler › 1.: en fazla 60 karakter"), loc);
+
+await act("/admin/icerik", "saveSection", energyFields(energyOriginal));
+await act("/admin/icerik", "publishLanding", {});
+const homeEnergy2 = await (await fetch(BASE + "/")).text();
+check("CMS 2: enerji içeriği geri alındı", homeEnergy2.includes(energyOriginal.solar.title) && !homeEnergy2.includes("Solar — test"), "");
 
 /* ---------- 2. Bilgi tabanı: soru-cevap ekle, arka planda işlensin ---------- */
 const q = `Smoke testi sorusu ${Date.now()}`;

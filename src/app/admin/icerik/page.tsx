@@ -4,7 +4,7 @@ import { Badge, btn, Field, Flash, inputCls, Notice, PageHeader, Panel, selectCl
 import { requireAdmin } from "@/lib/auth";
 import { LANDING_ICONS, resolveIcon } from "@/lib/cms/icons";
 import { getLanding, getLandingDoc } from "@/lib/cms/store";
-import { defaultLandingContent, SCENE_META, type LandingContent, type SceneKey } from "@/lib/cms/schema";
+import { defaultLandingContent, SCENE_META, type LandingContent } from "@/lib/cms/schema";
 import { param, type SearchParams } from "@/lib/form";
 import { fmtDateTime } from "@/lib/format";
 import { discardDraft, publishLanding, saveSection } from "./actions";
@@ -14,17 +14,98 @@ export const metadata = { title: "Site sayfaları" };
 const SECTIONS = [
   { id: "genel", label: "Genel ve hero" },
   { id: "core", label: "Panel sahnesi" },
-  { id: "agro", label: "Agro sahnesi" },
-  { id: "fly", label: "Fly sahnesi" },
-  { id: "bolumler", label: "Modlar ve Asistan" },
+  { id: "seyahat", label: "Seyahat" },
+  { id: "enerji", label: "Enerji" },
+  { id: "ucus", label: "Uçuş" },
+  { id: "yol", label: "Yol haritası ve erken erişim" },
+  { id: "asistan", label: "Asistan" },
   { id: "premium", label: "Premium ve alt bilgi" },
 ];
 
 const STAGES = ["Parçalar dağılırken", "Parçalar birleşirken ve 1. ekranda", "2. ekranda", "3. ekranda (asistan)"];
 
+const ROADMAP_STATES = [
+  { value: "live", label: "Yayında" },
+  { value: "soon", label: "Yakında" },
+  { value: "planned", label: "Planlanıyor" },
+  { value: "vision", label: "Vizyon" },
+];
+
 function Input({ name, value, label, max, className }: { name: string; value: string; label?: string; max?: number; className?: string }) {
   return (
     <input name={name} defaultValue={value} maxLength={max} aria-label={label ?? name} className={`${inputCls} ${className ?? ""}`} />
+  );
+}
+
+/** Etiketli tek satırlık (ya da `rows` verilirse çok satırlı) metin alanı. */
+function Txt({ id, name, label, value, max, rows, hint, className }: { id: string; name: string; label: string; value: string; max: number; rows?: number; hint?: string; className?: string }) {
+  return (
+    <Field label={label} htmlFor={id} hint={hint} className={className}>
+      {rows ? (
+        <textarea id={id} name={name} rows={rows} defaultValue={value} maxLength={max} className={textareaCls} />
+      ) : (
+        <input id={id} name={name} defaultValue={value} maxLength={max} className={inputCls} />
+      )}
+    </Field>
+  );
+}
+
+/** Madde listesi: üst sınıra kadar boş satırla doldurulur; boş satırlar kaydedilirken atılır. */
+function ListInputs({ name, values, size, max, label }: { name: string; values: string[]; size: number; max: number; label: string }) {
+  const rows = [...values, ...Array.from({ length: Math.max(0, size - values.length) }, () => "")];
+  return (
+    <div className="grid gap-1.5">
+      {rows.map((v, i) => (
+        <Input key={i} name={`${name}.${i}`} value={v} label={`${label} ${i + 1}`} max={max} />
+      ))}
+    </div>
+  );
+}
+
+/** Simgeli kart listesi (özellik ızgarası, uçuş analizleri). Boş başlık+metin satırları gösterilmez. */
+function IconCards({ name, items, size, titleMax, textMax }: { name: string; items: { icon: string; title: string; text: string }[]; size: number; titleMax: number; textMax: number }) {
+  const rows = [...items, ...Array.from({ length: Math.max(0, size - items.length) }, () => ({ icon: "sparkles", title: "", text: "" }))];
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {rows.map((c, i) => (
+        <fieldset key={i} className="grid grid-cols-[minmax(0,10rem)_1fr] gap-2 rounded-lg border border-line p-3">
+          <legend className="px-1 text-xs text-muted">{i + 1}. kart</legend>
+          <IconSelect name={`${name}.${i}.icon`} value={c.icon} label="Simge" />
+          <Input name={`${name}.${i}.title`} value={c.title} label="Başlık" max={titleMax} />
+          <Input name={`${name}.${i}.text`} value={c.text} label="Metin" className="col-span-2" max={textMax} />
+        </fieldset>
+      ))}
+    </div>
+  );
+}
+
+/** Enerji bölümündeki Solar / Wind kartı. */
+function EnergyEditor({ name, card, title }: { name: "energy.solar" | "energy.wind"; card: LandingContent["energy"]["solar"]; title: string }) {
+  const id = name.replace(".", "-");
+  return (
+    <Panel title={title} description="Her liste en çok 6 madde; boş satırlar gösterilmez.">
+      <div className="grid gap-4">
+        <div className="grid grid-cols-[minmax(0,10rem)_1fr] gap-2">
+          <IconSelect name={`${name}.icon`} value={card.icon} label="Simge" />
+          <Input name={`${name}.title`} value={card.title} label="Başlık" max={40} />
+        </div>
+        <Txt id={`${id}-x`} name={`${name}.text`} label="Açıklama" value={card.text} max={160} rows={3} />
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="grid gap-1.5">
+            <div className="text-[13px] font-medium">Analiz edilen veriler</div>
+            <ListInputs name={`${name}.data`} values={card.data} size={6} max={60} label="Veri" />
+          </div>
+          <div className="grid gap-1.5">
+            <div className="text-[13px] font-medium">Kullanım alanları</div>
+            <ListInputs name={`${name}.uses`} values={card.uses} size={6} max={60} label="Kullanım alanı" />
+          </div>
+          <div className="grid gap-1.5">
+            <div className="text-[13px] font-medium">Neye yardımcı olur</div>
+            <ListInputs name={`${name}.benefits`} values={card.benefits} size={6} max={80} label="Fayda" />
+          </div>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -43,7 +124,7 @@ function IconSelect({ name, value, label, className }: { name: string; value: st
   );
 }
 
-function SceneEditor({ s, accent }: { s: LandingContent["scenes"][SceneKey]; accent: string }) {
+function SceneEditor({ s, accent }: { s: LandingContent["scenes"]["core"]; accent: string }) {
   const cards = [...s.screen2.cards, ...Array.from({ length: 4 - s.screen2.cards.length }, () => ({ title: "", text: "" }))];
   const bubbles = [...s.screen3.bubbles, ...Array.from({ length: 6 - s.screen3.bubbles.length }, () => ({ from: "ai" as const, text: "" }))];
   return (
@@ -149,7 +230,9 @@ function SceneEditor({ s, accent }: { s: LandingContent["scenes"][SceneKey]; acc
 export default async function CmsPage({ searchParams }: { searchParams: SearchParams }) {
   await requireAdmin("cms");
   const sp = await searchParams;
-  const section = SECTIONS.some((s) => s.id === param(sp, "bolum")) ? param(sp, "bolum") : "genel";
+  // Eski bağlantı: "Modlar ve Asistan" sekmesi (bolumler) artık yalnızca Asistan.
+  const requested = param(sp, "bolum") === "bolumler" ? "asistan" : param(sp, "bolum");
+  const section = SECTIONS.some((s) => s.id === requested) ? requested : "genel";
   const doc = await getLandingDoc();
   // Okurken güncel biçime dönüştürülmüş taslak (eski emoji simgeleri, eski varsayılan metinler).
   const draft: LandingContent = doc ? await getLanding("draft") : defaultLandingContent();
@@ -215,32 +298,165 @@ export default async function CmsPage({ searchParams }: { searchParams: SearchPa
           </>
         )}
 
-        {(section === "core" || section === "agro" || section === "fly") && (
+        {section === "core" && (
           <>
             <Notice>
-              {SCENE_META[section].label}: parçalar telefondan dışarı savrulur, geri toplanıp hücrelere oturur, ardından telefon ekranı 3 kez kayar. Satır sayıları bu yüzden sabittir.
+              {SCENE_META.core.label}: parçalar telefondan dışarı savrulur, geri toplanıp hücrelere oturur, ardından telefon ekranı 3 kez kayar. Satır sayıları bu yüzden sabittir.
             </Notice>
-            <SceneEditor s={draft.scenes[section]} accent={SCENE_META[section].accent} />
+            <SceneEditor s={draft.scenes.core} accent={SCENE_META.core.accent} />
           </>
         )}
 
-        {section === "bolumler" && (
-          <div className="grid gap-5 lg:grid-cols-2">
-            <Panel title="Modlar bölümü" description="Panel sahnesinden sonra gelen koyu bölüm.">
-              <div className="grid gap-3">
-                <Field label="Rozet" htmlFor="p2b"><input id="p2b" name="phase2.badge" defaultValue={draft.phase2.badge} maxLength={30} className={inputCls} /></Field>
-                <Field label="Başlık" htmlFor="p2t"><input id="p2t" name="phase2.title" defaultValue={draft.phase2.title} maxLength={80} className={inputCls} /></Field>
-                <Field label="Metin" htmlFor="p2x"><textarea id="p2x" name="phase2.text" rows={4} defaultValue={draft.phase2.text} maxLength={260} className={textareaCls} /></Field>
+        {section === "seyahat" && (
+          <>
+            <Panel title="Akıllı Güzergâh Takibi" description="Panel sahnesinden sonra gelen ilk bölüm. Menüdeki “Seyahat” bağlantısı buraya gider.">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Txt id="rt-e" name="route.eyebrow" label="Üst etiket" value={draft.route.eyebrow} max={40} />
+                <Txt id="rt-t" name="route.title" label="Başlık" value={draft.route.title} max={80} />
+                <Txt id="rt-x" name="route.text" label="Metin" value={draft.route.text} max={260} rows={3} className="sm:col-span-2" />
+                <div className="grid gap-1.5 sm:col-span-2">
+                  <div className="text-[13px] font-medium">Maddeler (en çok 4; boş olanlar gösterilmez)</div>
+                  <ListInputs name="route.bullets" values={draft.route.bullets} size={4} max={100} label="Madde" />
+                </div>
               </div>
             </Panel>
-            <Panel title="Asistan bölümü" description="Fly sahnesinden sonra gelir.">
-              <div className="grid gap-3">
-                <Field label="Üst etiket" htmlFor="ase"><input id="ase" name="assistant.eyebrow" defaultValue={draft.assistant.eyebrow} maxLength={40} className={inputCls} /></Field>
-                <Field label="Başlık" htmlFor="ast"><input id="ast" name="assistant.title" defaultValue={draft.assistant.title} maxLength={80} className={inputCls} /></Field>
-                <Field label="Metin" htmlFor="asx"><textarea id="asx" name="assistant.text" rows={4} defaultValue={draft.assistant.text} maxLength={260} className={textareaCls} /></Field>
+            <Panel title="Örnek ekran kartı" description="Rakamlı örnektir; sitede “Örnek ekran” etiketiyle gösterilir. Gerçek veri değildir. 4 durak sabittir.">
+              <div className="grid gap-4">
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Txt id="sm-l" name="route.sample.label" label="Etiket" value={draft.route.sample.label} max={20} />
+                  <Txt id="sm-f" name="route.sample.from" label="Çıkış" value={draft.route.sample.from} max={30} />
+                  <Txt id="sm-t" name="route.sample.to" label="Varış" value={draft.route.sample.to} max={30} />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {draft.route.sample.stops.map((st, i) => (
+                    <fieldset key={i} className="grid grid-cols-[1fr_6rem] gap-2 rounded-lg border border-line p-3">
+                      <legend className="px-1 text-xs text-muted">{i + 1}. durak</legend>
+                      <Input name={`route.sample.stops.${i}.city`} value={st.city} label="Şehir" max={30} />
+                      <Input name={`route.sample.stops.${i}.temp`} value={st.temp} label="Sıcaklık" max={8} />
+                    </fieldset>
+                  ))}
+                </div>
+                <Txt id="sm-a" name="route.sample.alert" label="Bildirim metni" value={draft.route.sample.alert} max={120} />
               </div>
             </Panel>
-          </div>
+            <Panel title="Faz 1 özellik ızgarası" description="En çok 12 kart; boş olanlar gösterilmez. Varsayılan 9 karttır.">
+              <div className="grid gap-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Txt id="ft-b" name="features.badge" label="Rozet" value={draft.features.badge} max={30} />
+                  <Txt id="ft-t" name="features.title" label="Başlık" value={draft.features.title} max={80} />
+                  <Txt id="ft-x" name="features.text" label="Metin" value={draft.features.text} max={220} rows={2} className="sm:col-span-2" />
+                </div>
+                <IconCards name="features.items" items={draft.features.items} size={12} titleMax={40} textMax={120} />
+              </div>
+            </Panel>
+            <Panel title="Tarla ve bahçe kartı" description="Seyahat bölümünün sonundaki tek kart.">
+              <div className="grid gap-4 sm:grid-cols-[minmax(0,12rem)_1fr]">
+                <Field label="Simge">
+                  <IconSelect name="agroCard.icon" value={draft.agroCard.icon} label="Simge" />
+                </Field>
+                <Txt id="ag-t" name="agroCard.title" label="Başlık" value={draft.agroCard.title} max={60} />
+                <Txt id="ag-x" name="agroCard.text" label="Metin" value={draft.agroCard.text} max={220} rows={2} className="sm:col-span-2" />
+              </div>
+            </Panel>
+          </>
+        )}
+
+        {section === "enerji" && (
+          <>
+            <Panel title="Enerji bölümü" description="Hazır olmayan modül: rozet “Yakında” gibi durumu açıkça söylemeli. Buton, erken erişim formu yayında olduğunda görünür.">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Txt id="en-b" name="energy.badge" label="Rozet" value={draft.energy.badge} max={30} />
+                <Txt id="en-t" name="energy.title" label="Başlık" value={draft.energy.title} max={80} />
+                <Txt id="en-x" name="energy.text" label="Metin" value={draft.energy.text} max={260} rows={3} className="sm:col-span-2" />
+                <Txt id="en-c" name="energy.ctaLabel" label="Buton" value={draft.energy.ctaLabel} max={40} />
+              </div>
+            </Panel>
+            <EnergyEditor name="energy.solar" card={draft.energy.solar} title="Solar" />
+            <EnergyEditor name="energy.wind" card={draft.energy.wind} title="Wind" />
+          </>
+        )}
+
+        {section === "ucus" && (
+          <>
+            <Panel title="Uçuş bölümü" description="Hazır olmayan modül: rozet “Planlanıyor” gibi durumu açıkça söylemeli. Buton, erken erişim formu yayında olduğunda görünür.">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Txt id="av-b" name="aviation.badge" label="Rozet" value={draft.aviation.badge} max={30} />
+                <Txt id="av-t" name="aviation.title" label="Başlık" value={draft.aviation.title} max={80} />
+                <Txt id="av-x" name="aviation.text" label="Metin" value={draft.aviation.text} max={260} rows={3} className="sm:col-span-2" />
+                <Txt id="av-n" name="aviation.note" label="Not satırı" value={draft.aviation.note} max={200} rows={2} className="sm:col-span-2" />
+                <Txt id="av-c" name="aviation.ctaLabel" label="Buton" value={draft.aviation.ctaLabel} max={40} />
+              </div>
+            </Panel>
+            <Panel title="Planlanan analizler" description="En çok 6 kart; boş olanlar gösterilmez.">
+              <IconCards name="aviation.analyses" items={draft.aviation.analyses} size={6} titleMax={40} textMax={120} />
+            </Panel>
+            <Panel title="Kullanım alanları" description="En çok 6 madde; boş olanlar gösterilmez.">
+              <ListInputs name="aviation.uses" values={draft.aviation.uses} size={6} max={60} label="Kullanım alanı" />
+            </Panel>
+          </>
+        )}
+
+        {section === "yol" && (
+          <>
+            <Panel title="Yol haritası" description="Faz sayısı 4, sabit. Durum rengi seçilen duruma göre belirlenir.">
+              <div className="grid gap-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Txt id="rm-e" name="roadmap.eyebrow" label="Üst etiket" value={draft.roadmap.eyebrow} max={40} />
+                  <Txt id="rm-t" name="roadmap.title" label="Başlık" value={draft.roadmap.title} max={80} />
+                  <Txt id="rm-x" name="roadmap.text" label="Metin" value={draft.roadmap.text} max={220} rows={2} className="sm:col-span-2" />
+                </div>
+                <div className="grid gap-3 lg:grid-cols-2">
+                  {draft.roadmap.phases.map((p, i) => (
+                    <fieldset key={i} className="grid gap-2 rounded-lg border border-line p-3 sm:grid-cols-2">
+                      <legend className="px-1 text-xs text-muted">{`Faz ${i + 1}`}</legend>
+                      <Input name={`roadmap.phases.${i}.label`} value={p.label} label="Faz etiketi" max={20} />
+                      <Input name={`roadmap.phases.${i}.name`} value={p.name} label="Faz adı" max={40} />
+                      <select name={`roadmap.phases.${i}.state`} defaultValue={p.state} aria-label="Durum" className={selectCls}>
+                        {ROADMAP_STATES.map((st) => (
+                          <option key={st.value} value={st.value}>
+                            {st.label}
+                          </option>
+                        ))}
+                      </select>
+                      <Input name={`roadmap.phases.${i}.stateLabel`} value={p.stateLabel} label="Durum etiketi" max={20} />
+                      <Input name={`roadmap.phases.${i}.text`} value={p.text} label="Metin" className="sm:col-span-2" max={200} />
+                    </fieldset>
+                  ))}
+                </div>
+              </div>
+            </Panel>
+            <Panel title="Erken erişim" description="Bölüm yalnızca erken erişim formu yayında olduğunda görünür.">
+              <div className="grid gap-4">
+                <Notice>Form alan adları ve hata mesajları kodda sabittir. Onay kutusu metni her başvuruyla birlikte kayda geçer.</Notice>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Txt id="ea-e" name="earlyAccess.eyebrow" label="Üst etiket" value={draft.earlyAccess.eyebrow} max={40} />
+                  <Txt id="ea-t" name="earlyAccess.title" label="Başlık" value={draft.earlyAccess.title} max={80} />
+                  <Txt id="ea-x" name="earlyAccess.text" label="Metin" value={draft.earlyAccess.text} max={260} rows={2} className="sm:col-span-2" />
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Txt id="ea-ms" name="earlyAccess.moduleLabels.solar" label="Modül adı: Solar" value={draft.earlyAccess.moduleLabels.solar} max={40} />
+                  <Txt id="ea-mw" name="earlyAccess.moduleLabels.wind" label="Modül adı: Wind" value={draft.earlyAccess.moduleLabels.wind} max={40} />
+                  <Txt id="ea-mf" name="earlyAccess.moduleLabels.fly" label="Modül adı: Uçuş" value={draft.earlyAccess.moduleLabels.fly} max={40} />
+                </div>
+                <Txt id="ea-p" name="earlyAccess.privacyNote" label="Aydınlatma notu" value={draft.earlyAccess.privacyNote} max={400} rows={3} />
+                <Txt id="ea-c" name="earlyAccess.consentLabel" label="Onay kutusu metni" value={draft.earlyAccess.consentLabel} max={200} rows={2} />
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Txt id="ea-s" name="earlyAccess.submitLabel" label="Gönder butonu" value={draft.earlyAccess.submitLabel} max={30} />
+                  <Txt id="ea-o" name="earlyAccess.successText" label="Başarı mesajı" value={draft.earlyAccess.successText} max={200} />
+                </div>
+              </div>
+            </Panel>
+          </>
+        )}
+
+        {section === "asistan" && (
+          <Panel title="Asistan bölümü" description="Uçuş bölümünden sonra gelir; altındaki ton örneği kodda sabittir.">
+            <div className="grid gap-3">
+              <Field label="Üst etiket" htmlFor="ase"><input id="ase" name="assistant.eyebrow" defaultValue={draft.assistant.eyebrow} maxLength={40} className={inputCls} /></Field>
+              <Field label="Başlık" htmlFor="ast"><input id="ast" name="assistant.title" defaultValue={draft.assistant.title} maxLength={80} className={inputCls} /></Field>
+              <Field label="Metin" htmlFor="asx"><textarea id="asx" name="assistant.text" rows={4} defaultValue={draft.assistant.text} maxLength={260} className={textareaCls} /></Field>
+            </div>
+          </Panel>
         )}
 
         {section === "premium" && (

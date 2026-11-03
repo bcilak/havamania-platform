@@ -42,6 +42,11 @@ const pages: [string, string][] = [
   ["/admin/icerik", "Site sayfaları"],
   ["/admin/icerik?bolum=core", "Veri çipleri"],
   ["/admin/icerik?bolum=premium", "Premium"],
+  ["/admin/icerik?bolum=seyahat", "Akıllı Güzergâh"],
+  ["/admin/icerik?bolum=enerji", "Solar"],
+  ["/admin/icerik?bolum=ucus", "Planlanan analizler"],
+  ["/admin/icerik?bolum=yol", "Faz 4"],
+  ["/admin/icerik?bolum=bolumler", "Asistan bölümü"],
   ["/admin/medya", "Medya kütüphanesi"],
   ["/admin/konusmalar", "Konuşmalar"],
   ["/admin/konusmalar?durum=olumsuz", "Konuşmalar"],
@@ -66,7 +71,7 @@ const pages: [string, string][] = [
   ["/admin/hesabim", "Hesabım"],
   ["/admin/yasal", "Yasal sayfalar"],
 ];
-if (demoConv) pages.splice(7, 0, [`/admin/konusmalar/${demoConv.id}`, "Ayrıntılar"]);
+if (demoConv) pages.splice(12, 0, [`/admin/konusmalar/${demoConv.id}`, "Ayrıntılar"]);
 // Sürüm ayrıntı sayfası kalite özetini gösterir (yayınlanmış sürüm yoksa atlanır).
 const [anyVersion] = await sql`select id from bot_versions order by published_at desc limit 1`;
 if (anyVersion) pages.push([`/admin/yayin/${anyVersion.id}`, "Kalite özeti"]);
@@ -243,6 +248,17 @@ check("widget.js", wjs.ok && (await wjs.text()).includes("havamania-chat"), `${w
 
 const home = await (await fetch(BASE + "/")).text();
 check("Landing CMS'ten üretiliyor", home.includes("data-scene=\"core\"") && home.includes("Dağınık veri"), "");
+check(
+  "Landing: tek kaydırmalı sahne, yeni bölümler var, agro/fly/modlar yok",
+  // Yalnızca gerçek öznitelik sayılır; aynı HTML sayfa verisinde kaçışlı (data-scene=\") olarak da geçer.
+  (home.match(/data-scene="/g) ?? []).length === 1 &&
+    ["panel", "seyahat", "enerji", "ucus", "asistan", "yol-haritasi", "premium"].every((id) => home.includes(`id="${id}"`)) &&
+    !["agro", "fly", "modlar"].some((id) => home.includes(`id="${id}"`)) &&
+    !home.includes("data-meadow"),
+  "",
+);
+// Teslimat A: erken erişim formu henüz yok; bölüm ve CTA görünmemeli.
+check("Landing: erken erişim bölümü ve CTA'lar henüz yok", !home.includes("id=\"erken-erisim\"") && !home.includes("data-ea-pick"), "");
 
 /* ---------- Yasal sayfalar (Google Play / App Store) ---------- */
 for (const [path, needle] of [["/gizlilik", "KVKK"], ["/kullanim-kosullari", "Kullanım Koşulları"], ["/hesap-silme", "Silinen veriler"], ["/kvkk", "Veri sorumlusu"]]) {

@@ -43,6 +43,11 @@ export const LANDING_ICONS = {
   "calendar": { label: "Takvim", svg: "<path d=\"M8 2v3\"/><path d=\"M16 2v3\"/><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"/><path d=\"M3 9h18\"/>" },
   "clock": { label: "Saat", svg: "<circle cx=\"12\" cy=\"12\" r=\"10\"/><path d=\"M12 6v6l4 2\"/>" },
   "shield-check": { label: "Güvenlik", svg: "<path d=\"M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z\"/><path d=\"m9 12 2 2 4-4\"/>" },
+  "luggage": { label: "Valiz", svg: "<path d=\"M6 20a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2\"/><path d=\"M8 18V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v14\"/><path d=\"M10 20h4\"/><circle cx=\"16\" cy=\"20\" r=\"2\"/><circle cx=\"8\" cy=\"20\" r=\"2\"/>" },
+  "route": { label: "Güzergâh", svg: "<circle cx=\"6\" cy=\"19\" r=\"3\"/><path d=\"M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15\"/><circle cx=\"18\" cy=\"5\" r=\"3\"/>" },
+  "wifi-off": { label: "Veri tasarrufu", svg: "<path d=\"M12 20h.01\"/><path d=\"M8.5 16.429a5 5 0 0 1 7 0\"/><path d=\"M5 12.859a10 10 0 0 1 5.17-2.69\"/><path d=\"M19 12.859a10 10 0 0 0-2.007-1.523\"/><path d=\"M2 8.82a15 15 0 0 1 4.177-2.643\"/><path d=\"M22 8.82a15 15 0 0 0-11.288-3.764\"/><path d=\"m2 2 20 20\"/>" },
+  "zap": { label: "Enerji", svg: "<path d=\"M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z\"/>" },
+  "inbox": { label: "Başvuru", svg: "<polyline points=\"22 12 16 12 14 15 10 15 8 12 2 12\"/><path d=\"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z\"/>" },
 } as const;
 
 export type LandingIconName = keyof typeof LANDING_ICONS;
@@ -60,8 +65,10 @@ const EMOJI_TO_ICON: Record<string, LandingIconName> = {
 /** Simge adını ya da eski emoji değerini simge adına çevirir; tanınmıyorsa null. */
 export function resolveIcon(value: string): LandingIconName | null {
   const v = value.trim();
-  if (v in LANDING_ICONS) return v as LandingIconName;
-  return EMOJI_TO_ICON[v.replace(/[\uFE0E\uFE0F]/g, "")] ?? null;
+  // Kal\u0131t\u0131lan anahtarlar ("constructor", "toString"...) simge say\u0131lmas\u0131n diye hasOwn kullan\u0131l\u0131r.
+  if (Object.hasOwn(LANDING_ICONS, v)) return v as LandingIconName;
+  const emoji = v.replace(/[\uFE0E\uFE0F]/g, "");
+  return Object.hasOwn(EMOJI_TO_ICON, emoji) ? EMOJI_TO_ICON[emoji] : null;
 }
 
 /** Satır içi SVG. Renk currentColor'dan gelir; boyut CSS ile verilir. */

@@ -8,12 +8,20 @@ import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
 import { getLanding, getLandingDoc, LANDING_ID } from "@/lib/cms/store";
 import { landingSchema, type LandingContent, type SceneKey } from "@/lib/cms/schema";
+import { describeIssue, type Issue } from "@/lib/cms/issue";
 import { done, fail, formToObject, str } from "@/lib/form";
 
 const BACK = "/admin/icerik";
 
 type Obj = Record<string, unknown>;
 const arr = (v: unknown): Obj[] => (Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : []).filter(Boolean) as Obj[];
+/** Madde listesi: dizi ya da {0:…,1:…} nesnesini düz metne çevirir, kırpar, boş satırları atar. */
+const strList = (v: unknown): string[] =>
+  (Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : [])
+    .map((x) => (typeof x === "string" ? x.trim() : ""))
+    .filter(Boolean);
+/** Başlığı ya da metni dolu olan kartlar kalır; boş satırlar gösterilmez. */
+const filled = (v: unknown): Obj[] => arr(v).filter((c) => c.title || c.text);
 
 function sceneFrom(fd: FormData): LandingContent["scenes"][SceneKey] {
   const raw = formToObject(fd, "scene") as Obj;
@@ -33,63 +41,6 @@ function sceneFrom(fd: FormData): LandingContent["scenes"][SceneKey] {
   } as unknown as LandingContent["scenes"][SceneKey];
 }
 
-/* Doğrulama hatasındaki alan yolunu editörün gördüğü adlarla yazmak için. */
-const LABELS: Record<string, string> = {
-  scenes: "",
-  core: "Panel sahnesi",
-  agro: "Agro sahnesi",
-  fly: "Fly sahnesi",
-  seo: "Arama motorları",
-  hero: "Hero",
-  nav: "Menü",
-  phase2: "Modlar bölümü",
-  assistant: "Asistan bölümü",
-  premium: "Premium",
-  footer: "Alt bilgi",
-  captions: "Başlıklar",
-  chips: "Çipler",
-  screen1: "1. ekran",
-  screen2: "2. ekran",
-  screen3: "3. ekran",
-  slots: "hücreler",
-  cards: "kartlar",
-  bubbles: "mesajlar",
-  eyebrow: "üst etiket",
-  title: "başlık",
-  sub: "alt metin",
-  subtitle: "alt metin",
-  text: "metin",
-  icon: "ikon",
-  label: "etiket",
-  value: "değer",
-  unit: "birim",
-  header: "üst satır",
-  location: "konum satırı",
-  temp: "büyük değer",
-  condition: "durum",
-  note: "not",
-  ringValue: "halka değeri",
-  ringLabel: "halka etiketi",
-  description: "açıklama",
-  ctaLabel: "buton",
-};
-
-function describeIssue(issue: { code: string; message: string; path: PropertyKey[]; maximum?: unknown; minimum?: unknown }): string {
-  const where = issue.path
-    .map((p) => (typeof p === "number" ? `${p + 1}.` : (LABELS[String(p)] ?? String(p))))
-    .filter(Boolean)
-    .join(" › ");
-  const what =
-    issue.code === "too_big"
-      ? `en fazla ${String(issue.maximum)} karakter olabilir`
-      : issue.code === "too_small"
-        ? Number(issue.minimum) > 1
-          ? `en az ${String(issue.minimum)} tane olmalı`
-          : "boş bırakılamaz"
-        : "geçersiz";
-  return `${where}: ${what}`;
-}
-
 export async function saveSection(fd: FormData) {
   const admin = await requireAdmin("cms");
   const section = str(fd, "section");
@@ -101,10 +52,34 @@ export async function saveSection(fd: FormData) {
     next.seo = formToObject(fd, "seo") as LandingContent["seo"];
     next.nav = formToObject(fd, "nav") as LandingContent["nav"];
     next.hero = formToObject(fd, "hero") as LandingContent["hero"];
-  } else if (section === "core" || section === "agro" || section === "fly") {
-    next.scenes[section] = sceneFrom(fd);
-  } else if (section === "bolumler") {
-    next.phase2 = formToObject(fd, "phase2") as LandingContent["phase2"];
+  } else if (section === "core") {
+    next.scenes.core = sceneFrom(fd);
+  } else if (section === "seyahat") {
+    const route = formToObject(fd, "route") as Obj;
+    const sample = (route.sample ?? {}) as Obj;
+    const features = formToObject(fd, "features") as Obj;
+    next.route = {
+      ...route,
+      bullets: strList(route.bullets),
+      sample: { ...sample, stops: arr(sample.stops) },
+    } as unknown as LandingContent["route"];
+    next.features = { ...features, items: filled(features.items) } as unknown as LandingContent["features"];
+    next.agroCard = formToObject(fd, "agroCard") as LandingContent["agroCard"];
+  } else if (section === "enerji") {
+    const energy = formToObject(fd, "energy") as Obj;
+    const card = (v: unknown) => {
+      const o = (v ?? {}) as Obj;
+      return { ...o, data: strList(o.data), uses: strList(o.uses), benefits: strList(o.benefits) };
+    };
+    next.energy = { ...energy, solar: card(energy.solar), wind: card(energy.wind) } as unknown as LandingContent["energy"];
+  } else if (section === "ucus") {
+    const av = formToObject(fd, "aviation") as Obj;
+    next.aviation = { ...av, analyses: filled(av.analyses), uses: strList(av.uses) } as unknown as LandingContent["aviation"];
+  } else if (section === "yol") {
+    const rm = formToObject(fd, "roadmap") as Obj;
+    next.roadmap = { ...rm, phases: arr(rm.phases) } as unknown as LandingContent["roadmap"];
+    next.earlyAccess = formToObject(fd, "earlyAccess") as LandingContent["earlyAccess"];
+  } else if (section === "asistan") {
     next.assistant = formToObject(fd, "assistant") as LandingContent["assistant"];
   } else if (section === "premium") {
     const p = formToObject(fd, "premium") as Obj;
@@ -114,7 +89,7 @@ export async function saveSection(fd: FormData) {
 
   const parsed = landingSchema.safeParse(next);
   if (!parsed.success) {
-    fail(back, describeIssue(parsed.error.issues[0] as Parameters<typeof describeIssue>[0]));
+    fail(back, describeIssue(parsed.error.issues[0] as unknown as Issue));
   }
   await db
     .insert(cmsDocuments)

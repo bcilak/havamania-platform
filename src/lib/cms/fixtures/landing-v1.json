@@ -1,0 +1,497 @@
+{
+  "seo": {
+    "title": "Havamania — Akıllı Hava, Tarım & Uçuş Asistanı",
+    "description": "Havamania, dağınık atmosferik veriyi tek panelde anlama dönüştürür. Seyahat planlayıcı, Agro Modu, Fly Modu ve size kendi dilinizden konuşan bir asistan.",
+    "ogImage": ""
+  },
+  "nav": {
+    "ctaLabel": "Premium"
+  },
+  "hero": {
+    "kicker": "Havamania",
+    "title": "Dağınık veri, tek dokunuşta anlam kazanır.",
+    "subtitle": "Hava durumunu akıllıca takip et, seyahatlerini akıllıca planla. Kaydırmaya başla — parçaların nasıl birleştiğini gör.",
+    "hint": "↓ kaydır"
+  },
+  "scenes": {
+    "core": {
+      "captions": [
+        {
+          "eyebrow": "Gelişmiş Atmosferik Panel",
+          "title": "Dağınık ham veri.",
+          "sub": "Onlarca metrik, her yerde."
+        },
+        {
+          "eyebrow": "Birleşme",
+          "title": "Tek panelde toplanır.",
+          "sub": "Her parça yerini bulur, ekranda yanar."
+        },
+        {
+          "eyebrow": "Seyahat Planlayıcı",
+          "title": "Veriden konfora.",
+          "sub": "%87 konfor skoru otomatik hesaplanır."
+        },
+        {
+          "eyebrow": "Havamania Asistan",
+          "title": "Ve seninle konuşur.",
+          "sub": "Sizin dilinizden bir meteorolog."
+        }
+      ],
+      "chips": [
+        {
+          "icon": "thermometer",
+          "label": "Hissedilen",
+          "value": "31°",
+          "unit": "rüzgâr dahil"
+        },
+        {
+          "icon": "sun",
+          "label": "UV İndeksi",
+          "value": "7",
+          "unit": "çok yüksek"
+        },
+        {
+          "icon": "wind",
+          "label": "Rüzgâr",
+          "value": "17",
+          "unit": "km/sa"
+        },
+        {
+          "icon": "droplets",
+          "label": "Nem",
+          "value": "%52",
+          "unit": "bağıl"
+        },
+        {
+          "icon": "eye",
+          "label": "Görüş",
+          "value": "40",
+          "unit": "km"
+        },
+        {
+          "icon": "gauge",
+          "label": "Basınç",
+          "value": "994",
+          "unit": "hPa"
+        }
+      ],
+      "screen1": {
+        "location": "BALIKESİR · Az Bulutlu",
+        "temp": "29°",
+        "condition": "Hissedilen 31°",
+        "slots": [
+          {
+            "label": "Hissedilen",
+            "value": "31°",
+            "unit": "rüzgâr dahil"
+          },
+          {
+            "label": "UV",
+            "value": "7",
+            "unit": "çok yüksek"
+          },
+          {
+            "label": "Rüzgâr",
+            "value": "17",
+            "unit": "km/sa"
+          },
+          {
+            "label": "Nem",
+            "value": "%52",
+            "unit": "bağıl"
+          },
+          {
+            "label": "Görüş",
+            "value": "40",
+            "unit": "km"
+          },
+          {
+            "label": "Basınç",
+            "value": "994",
+            "unit": "hPa"
+          }
+        ]
+      },
+      "screen2": {
+        "header": "SEYAHAT · İzmir",
+        "ringValue": "%87",
+        "ringLabel": "Konfor",
+        "ringPercent": 87,
+        "title": "30 Haz – 10 Tem",
+        "note": "“Pırıl pırıl gökyüzü... powerbank'i unutma.”",
+        "cards": [
+          {
+            "title": "🧳 Valiz",
+            "text": "Pamuklu kıyafet, güneş gözlüğü, krem."
+          },
+          {
+            "title": "📍 Yerel",
+            "text": "Kordon'da gün batımı yürüyüşü."
+          }
+        ]
+      },
+      "screen3": {
+        "header": "HAVAMANIA ASİSTAN",
+        "bubbles": [
+          {
+            "from": "ai",
+            "text": "Bugün Balıkesir az bulutlu, 29°. UV yüksek ☀️"
+          },
+          {
+            "from": "me",
+            "text": "Dışarı çıksam olur mu?"
+          },
+          {
+            "from": "ai",
+            "text": "Olur! İnce pamuklu giy, kremi unutma. 16:00 sonrası UV düşüyor."
+          },
+          {
+            "from": "me",
+            "text": "Akşam yağmur var mı?"
+          },
+          {
+            "from": "ai",
+            "text": "Yok, olasılık %0. Gökyüzü açık kalıyor 🌙"
+          }
+        ]
+      }
+    },
+    "agro": {
+      "captions": [
+        {
+          "eyebrow": "Agro Modu",
+          "title": "Tarlanın ham verisi.",
+          "sub": "Toprak, rüzgâr, don riski — dağınık."
+        },
+        {
+          "eyebrow": "Birleşme",
+          "title": "Tarımsal karara dönüşür.",
+          "sub": "Her metrik ürününe göre anlam kazanır."
+        },
+        {
+          "eyebrow": "Zamanlama",
+          "title": "Doğru gün, doğru saat.",
+          "sub": "İlaçlama ve hasat penceresi hazır."
+        },
+        {
+          "eyebrow": "Agro Asistan",
+          "title": "Ve tarlanla konuşur.",
+          "sub": "Ürününü bilen bir tarım danışmanı."
+        }
+      ],
+      "chips": [
+        {
+          "icon": "snowflake",
+          "label": "Don Riski",
+          "value": "Düşük",
+          "unit": "min 4°C"
+        },
+        {
+          "icon": "sprout",
+          "label": "Toprak Nemi",
+          "value": "%38",
+          "unit": "kök bölgesi"
+        },
+        {
+          "icon": "droplets",
+          "label": "Buharlaşma",
+          "value": "3.2",
+          "unit": "mm · ETo"
+        },
+        {
+          "icon": "cloud-rain",
+          "label": "Yağış 48s",
+          "value": "%65",
+          "unit": "sulamayı ertele"
+        },
+        {
+          "icon": "spray-can",
+          "label": "İlaçlama",
+          "value": "06–09",
+          "unit": "rüzgâr <8"
+        },
+        {
+          "icon": "wheat",
+          "label": "Hasat Skoru",
+          "value": "7/10",
+          "unit": "Perşembe"
+        }
+      ],
+      "screen1": {
+        "location": "TARLA · Buğday · Konya Ovası",
+        "temp": "14°",
+        "condition": "Toprak nemi %38 · Don: Düşük",
+        "slots": [
+          {
+            "label": "Don",
+            "value": "Düşük",
+            "unit": "min 4°"
+          },
+          {
+            "label": "Toprak",
+            "value": "%38",
+            "unit": "nem"
+          },
+          {
+            "label": "ETo",
+            "value": "3.2",
+            "unit": "mm"
+          },
+          {
+            "label": "Yağış",
+            "value": "%65",
+            "unit": "48s"
+          },
+          {
+            "label": "İlaçlama",
+            "value": "06–09",
+            "unit": "saat"
+          },
+          {
+            "label": "Hasat",
+            "value": "7/10",
+            "unit": "skor"
+          }
+        ]
+      },
+      "screen2": {
+        "header": "AGRO · Takvim",
+        "ringValue": "",
+        "ringLabel": "",
+        "ringPercent": 0,
+        "title": "Bu Haftanın Planı",
+        "note": "",
+        "cards": [
+          {
+            "title": "🧴 Salı 06:00",
+            "text": "İlaçlama için ideal: rüzgâr 6 km/sa, yağış yok."
+          },
+          {
+            "title": "🚿 Çarşamba",
+            "text": "Yağış bekleniyor — sulamayı ertele."
+          },
+          {
+            "title": "🌾 Perşembe",
+            "text": "Hasat için en düşük riskli gün (7/10)."
+          },
+          {
+            "title": "❄️ Cuma gece",
+            "text": "Sıcaklık 4°'ye iner — don koruması öneririz."
+          }
+        ]
+      },
+      "screen3": {
+        "header": "AGRO ASİSTAN",
+        "bubbles": [
+          {
+            "from": "ai",
+            "text": "Bu hafta buğday için ilaçlama penceresi Salı sabahı 🌱"
+          },
+          {
+            "from": "me",
+            "text": "Çarşamba sulasam?"
+          },
+          {
+            "from": "ai",
+            "text": "Gerek yok — %65 yağış var. Su ve gübreden tasarruf edersin."
+          },
+          {
+            "from": "me",
+            "text": "Don riski?"
+          },
+          {
+            "from": "ai",
+            "text": "Cuma gecesi 4°. Hassas parseller için örtü öneririm ❄️"
+          }
+        ]
+      }
+    },
+    "fly": {
+      "captions": [
+        {
+          "eyebrow": "Fly Modu",
+          "title": "Gökyüzünün ham verisi.",
+          "sub": "Rüzgâr, türbülans, buzlanma — dağınık."
+        },
+        {
+          "eyebrow": "Birleşme",
+          "title": "Uçuş radarına dönüşür.",
+          "sub": "Rota boyunca seviye seviye analiz."
+        },
+        {
+          "eyebrow": "Konfor",
+          "title": "En pürüzsüz irtifa.",
+          "sub": "Jet akımına göre rota önerisi."
+        },
+        {
+          "eyebrow": "Fly Asistan",
+          "title": "Ve rotanı anlatır.",
+          "sub": "Kokpit verisi, sade bir dille."
+        }
+      ],
+      "chips": [
+        {
+          "icon": "tornado",
+          "label": "Türbülans",
+          "value": "Orta",
+          "unit": "FL300–360"
+        },
+        {
+          "icon": "compass",
+          "label": "Rüzgâr",
+          "value": "120",
+          "unit": "kt · baş"
+        },
+        {
+          "icon": "plane",
+          "label": "Jet Akımı",
+          "value": "Aktif",
+          "unit": "FL340"
+        },
+        {
+          "icon": "snowflake",
+          "label": "Buzlanma",
+          "value": "Düşük",
+          "unit": "tırmanış"
+        },
+        {
+          "icon": "eye",
+          "label": "Görüş",
+          "value": "10",
+          "unit": "km"
+        },
+        {
+          "icon": "cloud",
+          "label": "Bulut Tabanı",
+          "value": "4000",
+          "unit": "ft"
+        }
+      ],
+      "screen1": {
+        "location": "UÇUŞ · IST → ESB · FL350",
+        "temp": "−54°",
+        "condition": "Türbülans: Orta · Jet aktif",
+        "slots": [
+          {
+            "label": "Türbülans",
+            "value": "Orta",
+            "unit": "FL300+"
+          },
+          {
+            "label": "Rüzgâr",
+            "value": "120",
+            "unit": "kt"
+          },
+          {
+            "label": "Jet",
+            "value": "Aktif",
+            "unit": "FL340"
+          },
+          {
+            "label": "Buzlanma",
+            "value": "Düşük",
+            "unit": "-"
+          },
+          {
+            "label": "Görüş",
+            "value": "10",
+            "unit": "km"
+          },
+          {
+            "label": "Taban",
+            "value": "4000",
+            "unit": "ft"
+          }
+        ]
+      },
+      "screen2": {
+        "header": "FLY · Rota Radarı",
+        "ringValue": "",
+        "ringLabel": "",
+        "ringPercent": 0,
+        "title": "IST → ESB",
+        "note": "Tahmini süre 1s 05dk · 3 türbülans bölgesi",
+        "cards": [
+          {
+            "title": "🟢 Kalkış–FL200",
+            "text": "Sakin. Hafif rüzgâr, sorunsuz tırmanış."
+          },
+          {
+            "title": "🟡 FL300–360",
+            "text": "Orta türbülans. Kemer uyarısı önerilir."
+          },
+          {
+            "title": "🟢 İniş fazı",
+            "text": "Görüş 10 km, bulut tabanı 4000 ft."
+          }
+        ]
+      },
+      "screen3": {
+        "header": "FLY ASİSTAN",
+        "bubbles": [
+          {
+            "from": "ai",
+            "text": "IST → ESB rotanda orta türbülans var: FL300–360 🌀"
+          },
+          {
+            "from": "me",
+            "text": "Daha rahat irtifa var mı?"
+          },
+          {
+            "from": "ai",
+            "text": "FL380'de jet akımı zayıflıyor, rüzgâr 70 kt'a düşüyor. Daha pürüzsüz."
+          },
+          {
+            "from": "me",
+            "text": "Buzlanma?"
+          },
+          {
+            "from": "ai",
+            "text": "Risk düşük, sadece tırmanışta hafif. Endişe yok ✈️"
+          }
+        ]
+      }
+    }
+  },
+  "phase2": {
+    "badge": "Üç mod · Tek uygulama",
+    "title": "Aynı zekâ, üç dünya.",
+    "text": "Havamania'nın motoru şehirde, tarlada ve gökyüzünde aynı dili konuşur: Hava, Agro ve Fly modları. Aynı patla-topla, her moda özel veriler."
+  },
+  "assistant": {
+    "eyebrow": "Havamania Asistan",
+    "title": "Her modda, sizin dilinizden.",
+    "text": "İster tarla ister uçuş — asistan tonunu siz seçersiniz: Samimi, Resmî, Dengeli (önerilen), Kısa ve Net ya da Detaylı Uzman."
+  },
+  "premium": {
+    "title": "Sınırları kaldırın.",
+    "text": "Standart tahminlerin ötesine geçin — %100 kişiselleştirilmiş bir hava, tarım ve uçuş deneyimi.",
+    "cards": [
+      {
+        "icon": "chart-line",
+        "title": "Gelişmiş Analizler",
+        "text": "Hava, tarla ve uçuş için özelleştirilmiş raporlar."
+      },
+      {
+        "icon": "user-round",
+        "title": "Tam AI Kişiselleştirme",
+        "text": "Tüm iletişim tonları ve sınırsız ilgi alanı."
+      },
+      {
+        "icon": "archive",
+        "title": "Arşiv Özellikleri",
+        "text": "Benzersiz seyahat ve sezon hafızası."
+      },
+      {
+        "icon": "palette",
+        "title": "Özel Temalar",
+        "text": "Ruh haline ve mevsime göre deneyim."
+      }
+    ],
+    "ctaLabel": "Premium Deneyime Geçiş Yapın"
+  },
+  "footer": {
+    "tagline": "Bu bir tahmin ekranı değil, günün tadını çıkarma stratejisidir.",
+    "copyright": "© 2025 Altıkod Digital Solutions · Havamania"
+  }
+}

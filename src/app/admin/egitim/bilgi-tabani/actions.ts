@@ -4,7 +4,7 @@ import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { db } from "@/db";
-import { cmsDocuments, kbSources, type ChatMode } from "@/db/schema";
+import { kbSources, type ChatMode } from "@/db/schema";
 import { processSource } from "@/lib/ai/ingest";
 import { isQaLike, planEdit } from "@/lib/ai/kb-edit-core";
 import { findSimilarQa } from "@/lib/ai/retrieval";
@@ -15,7 +15,7 @@ import { getMainBot } from "@/lib/bot";
 import { beginReprocess, purgeSources, removeSource } from "@/lib/kb";
 import { MODES } from "@/lib/bot-config";
 import { landingToText } from "@/lib/cms/flatten";
-import { defaultLandingContent } from "@/lib/cms/schema";
+import { getLanding } from "@/lib/cms/store";
 import { bool, done, fail, str, strStrict } from "@/lib/form";
 import { assertPublicUrl, SafeFetchError } from "@/lib/net/safe-fetch";
 import { extFor, newStorageKey, storage } from "@/lib/storage";
@@ -112,8 +112,8 @@ export async function addQa(fd: FormData): Promise<SimilarState> {
 export async function importCms() {
   const admin = await requireAdmin("training");
   const bot = await getMainBot();
-  const [doc] = await db.select().from(cmsDocuments).where(eq(cmsDocuments.id, "landing"));
-  const text = landingToText(doc?.published ?? doc?.draft ?? defaultLandingContent());
+  // Ham kayıt değil, şemaya göre tamamlanmış ve güncel biçime getirilmiş yayın (yeni alanlar eski kayıtta yok).
+  const text = landingToText(await getLanding("published"));
   const [existing] = await db
     .select()
     .from(kbSources)

@@ -49,16 +49,18 @@ export async function updateProvider(fd: FormData) {
   const [p] = await db.select().from(providers).where(eq(providers.id, id));
   if (!p) fail(BACK, "Sağlayıcı bulunamadı.");
 
-  const rows = formToObject(fd, "models").valueOf() as Record<string, Record<string, string>>;
+  const rows = formToObject(fd, "models") as Record<string, Record<string, unknown>>;
+  // Form dışı/bozuk girdide alanlar string olmayabilir ("models.0.id.x=1"); yalnızca string alanlar okunur.
+  const field = (r: Record<string, unknown>, k: string) => (typeof r[k] === "string" ? (r[k] as string) : "");
   const models: ProviderModel[] = Object.values(rows)
-    .filter((r) => r && r.id && r.remove !== "on")
+    .filter((r) => r && typeof r === "object" && field(r, "id") && field(r, "remove") !== "on")
     .map((r) => ({
-      id: r.id.trim(),
-      label: r.label?.trim() || r.id.trim(),
-      vision: r.vision === "on",
-      tools: r.tools === "on",
-      inputPer1M: Math.max(0, Number(String(r.inputPer1M ?? "0").replace(",", ".")) || 0),
-      outputPer1M: Math.max(0, Number(String(r.outputPer1M ?? "0").replace(",", ".")) || 0),
+      id: field(r, "id").trim(),
+      label: field(r, "label").trim() || field(r, "id").trim(),
+      vision: field(r, "vision") === "on",
+      tools: field(r, "tools") === "on",
+      inputPer1M: Math.max(0, Number((field(r, "inputPer1M") || "0").replace(",", ".")) || 0),
+      outputPer1M: Math.max(0, Number((field(r, "outputPer1M") || "0").replace(",", ".")) || 0),
     }));
   // Satır: "<model>" ya da "<model> <1M token için USD>" (vektörleme ve arama maliyeti için).
   const { models: embeddingModels, prices: embeddingPrices, tooHigh } = parseEmbeddingLines(str(fd, "embeddingModels", 1000));

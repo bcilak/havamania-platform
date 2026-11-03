@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* eslint-disable */
 // Landing kaydırma motoru. Havamania.dc.html içindeki düzeltilmiş sürümden birebir alındı
 // (çip çarpışma payı, dinamik küçültme, sahneye özel tema, pil dostu partikül döngüsü).
 // Kendi başına bir DOM motorudur; React yalnızca mount/unmount eder.
@@ -22,14 +21,12 @@ export class LandingEngine {
     this.setupAtmos();
     this.setupScenes();
     this.setupTones();
+    this.setupHashAnchor();
     this.onScroll = () => { if(!this._tick){ this._tick = true; requestAnimationFrame(()=>{ this.renderAll(); this._tick=false; }); } };
     this.onResize = () => {
       clearTimeout(this._rz);
       this._rz = setTimeout(()=>{
         this.applySceneHeights(); this.measureAll(); this.sizeCanvas();
-        const wasSpring = this.theme==='spring';
-        this.buildMeadow();
-        if(wasSpring) this.stems.forEach(g=>g.style.transform='scaleY(1)');
         this.renderAll();
       }, 120);
       this.measureAll(); this.sizeCanvas(); this.renderAll();
@@ -40,6 +37,49 @@ export class LandingEngine {
     if(window.visualViewport) visualViewport.addEventListener('resize', this.onResize);
     requestAnimationFrame(()=>{ this.measureAll(); this.renderAll(); });
   }
+  // Sayfa #seyahat gibi bir bagla acilirsa tarayici, motor sahne yuksekliklerini (mobilde
+  // 600vh -> 432vh) daraltmadan once atlamis olur ve yanlis konuma iner. Sahneler olculdukten
+  // sonra hedefe yeniden gidilir; kullanici kaydirmaya basladiysa karismaz.
+  setupHashAnchor(){
+    this.userScrolled = false;
+    this.onUserScroll = ()=>{ this.userScrolled = true; };
+    // pointerdown: kaydirma cubugunu surukleme de kullanici kaydirmasidir.
+    this.userEvents = ['wheel','touchstart','keydown','pointerdown'];
+    // Sayfa yenilemesinde tarayicinin geri yukledigi konum korunur; yalnizca reveal taramasi calisir.
+    this.isReload = performance.getEntriesByType('navigation')[0]?.type === 'reload';
+    this.userEvents.forEach(t=>addEventListener(t, this.onUserScroll, {passive:true}));
+    this.reanchor();
+    if(document.readyState !== 'complete'){
+      this.onLoadAnchor = ()=>this.reanchor();
+      addEventListener('load', this.onLoadAnchor, {once:true});
+    }
+    // Mount aninda yerlesim/konum henuz oturmamis olabilir (gorseller, yazi tipi, tarayicinin kendi
+    // parca atlamasi) ve gozlemci programatik atlamadan sonra her ortamda tetiklenmeyebilir.
+    // load'a bagimli kalmamak icin ilk birkac saniye gorunumdeki reveal ogeleri kisa araliklarla taranir.
+    this.revealInView();
+    let ticks = 0;
+    this._revealTimer = setInterval(()=>{
+      this.revealInView();
+      if(!this.pendingReveal || !this.pendingReveal.size || ++ticks >= 20){ clearInterval(this._revealTimer); this._revealTimer = null; }
+    }, 300);
+    // Ilk atlama anlik olsun diye yumusak kaydirma (CSS: html.hm-ready) yeniden konumlamadan sonra acilir.
+    this._ready = requestAnimationFrame(()=>document.documentElement.classList.add('hm-ready'));
+  }
+  reanchor(){
+    if(this.userScrolled || this.isReload) return;
+    const h = location.hash;
+    if(!h || h.length < 2) return;
+    let id;
+    try{ id = decodeURIComponent(h.slice(1)); }catch{ return; }
+    const el = document.getElementById(id);
+    if(!el || !this.root.contains(el)) return;
+    el.scrollIntoView({block:'start', behavior:'instant'});
+    // Konum degisti ama kaydirma olayi/gozlemci bekleme: gorunumdeki reveal ogelerini simdi ac,
+    // yerlesim oturunca (sonraki kare) bir kez daha.
+    this.revealInView();
+    cancelAnimationFrame(this._anchorRaf);
+    this._anchorRaf = requestAnimationFrame(()=>{ this.measureAll(); this.renderAll(); this.revealInView(); });
+  }
   componentWillUnmount(){
     removeEventListener('scroll', this.onScroll);
     removeEventListener('resize', this.onResize);
@@ -49,6 +89,12 @@ export class LandingEngine {
     clearTimeout(this._rz);
     if(this.io) this.io.disconnect();
     if(this.toneBtns) this.toneBtns.forEach(b=>b.removeEventListener('click', this.onTone));
+    if(this.userEvents) this.userEvents.forEach(t=>removeEventListener(t, this.onUserScroll));
+    if(this.onLoadAnchor) removeEventListener('load', this.onLoadAnchor);
+    if(this._ready) cancelAnimationFrame(this._ready);
+    if(this._anchorRaf) cancelAnimationFrame(this._anchorRaf);
+    if(this._revealTimer) clearInterval(this._revealTimer);
+    document.documentElement.classList.remove('hm-ready');
   }
   // Asistan bolumundeki ton ornegi: secilen tonun cevabini goster.
   setupTones(){
@@ -89,10 +135,27 @@ export class LandingEngine {
       el.style.transform = 'translateY(30px)';
     });
     if(this.reduced) return;
+    // Henuz acilmamis ogeler: IntersectionObserver bunlari kaydirma ile acar; baglanti ile
+    // (#enerji) acilista yeniden konumlamadan sonra revealInView() ayni isi hemen yapar.
+    this.pendingReveal = new Set(els);
     this.io = new IntersectionObserver(es=>es.forEach(e=>{
-      if(e.isIntersecting){ e.target.style.opacity=1; e.target.style.transform='none'; this.io.unobserve(e.target); }
+      if(e.isIntersecting) this.showReveal(e.target);
     }), {threshold:.14, rootMargin:'0px 0px -8% 0px'});
     els.forEach(el=>this.io.observe(el));
+  }
+  showReveal(el){
+    el.style.opacity=1; el.style.transform='none';
+    if(this.io) this.io.unobserve(el);
+    if(this.pendingReveal) this.pendingReveal.delete(el);
+  }
+  // Gorunumdeki (henuz acilmamis) ogeleri kaydirma beklemeden ac.
+  revealInView(){
+    if(!this.pendingReveal || !this.pendingReveal.size) return;
+    const vh = innerHeight;
+    [...this.pendingReveal].forEach(el=>{
+      const r = el.getBoundingClientRect();
+      if(r.bottom > 0 && r.top < vh*0.92) this.showReveal(el);
+    });
   }
 
   setupAtmos(){
@@ -100,21 +163,17 @@ export class LandingEngine {
       clear:  {top:'#7ec8f0',bottom:'#d7f0ff',ambient:'rgba(255,255,255,0)',   cel:{bg:'#fff3b0',sh:'0 0 60px 20px rgba(255,240,150,.6)',top:'12%',right:'14%',op:1},   part:'none'},
       cloudy: {top:'#9db4c4',bottom:'#cdd8de',ambient:'rgba(180,190,200,.25)', cel:{bg:'#fef8d0',sh:'0 0 40px 15px rgba(255,240,150,.3)',top:'12%',right:'14%',op:.5}, part:'none'},
       rain:   {top:'#4a5a6a',bottom:'#7d8a95',ambient:'rgba(60,70,85,.35)',    cel:{bg:'#c8ccd0',sh:'none',top:'12%',right:'14%',op:.2}, part:'rain', dark:true},
-      storm:  {top:'#232a35',bottom:'#3d4653',ambient:'rgba(15,20,30,.5)',     cel:{bg:'#8890a0',sh:'none',top:'12%',right:'14%',op:.1}, part:'rain', lightning:true, dark:true},
-      spring: {top:'#a9e0f5',bottom:'#fdf3e7',ambient:'rgba(255,225,180,.18)', cel:{bg:'#fff6c8',sh:'0 0 70px 24px rgba(255,244,180,.75)',top:'14%',right:'16%',op:1}, part:'petals', meadow:true}
+      storm:  {top:'#232a35',bottom:'#3d4653',ambient:'rgba(15,20,30,.5)',     cel:{bg:'#8890a0',sh:'none',top:'12%',right:'14%',op:.1}, part:'rain', lightning:true, dark:true}
     };
     this.atmosRoot = this.q('[data-atmos-root]');
     this.skyEl = this.q('[data-sky]');
     this.ambEl = this.q('[data-ambient]');
     this.celEl = this.q('[data-celestial]');
     this.flashEl = this.q('[data-flash]');
-    this.meadowEl = this.q('[data-meadow]');
     this.cv = this.q('[data-particles]');
     this.theme = ''; this.particleMode='none'; this.lightning=false;
-    this.buildMeadow();
     if(!this.atmosOn){ this.atmosRoot.style.display='none'; return; }
     this.pctx = this.cv.getContext('2d');
-    this.petalCols = ['#ffd6e0','#ffb3c6','#ffc8a2','#fff0b3','#ffffff'];
     this.sizeCanvas();
     const dens = this.props.particleDensity ?? 1;
     this._dens = dens;
@@ -130,33 +189,7 @@ export class LandingEngine {
     this.cv.width = Math.round(this.CW*dpr); this.cv.height = Math.round(this.CH*dpr);
     this.pctx.setTransform(dpr,0,0,dpr,0,0);
   }
-  mkP(){ return {x:Math.random()*(this.CW||innerWidth), y:Math.random()*-(this.CH||innerHeight), r:Math.random(), sp:Math.random(),
-    rot:Math.random()*6.28, rsp:(Math.random()-.5)*.05, col:this.petalCols[(Math.random()*this.petalCols.length)|0], dr:Math.random()*6.28}; }
-
-  buildMeadow(){
-    const pal=[{p:'#ff8fab',c:'#ffd166'},{p:'#ffd6e0',c:'#ff8fab'},{p:'#c8a2ff',c:'#fff3b0'},
-               {p:'#ffe066',c:'#ff9f1c'},{p:'#ffffff',c:'#ffd166'},{p:'#a0e7a0',c:'#ffe066'}];
-    // viewBox genişliğini kapsayıcı oranına göre üret → hiçbir ekranda kırpılma yok
-    const box=this.meadowEl.getBoundingClientRect();
-    const H=320, W=Math.max(600, Math.round(H*(box.width/Math.max(1,box.height))));
-    this.meadowEl.setAttribute('viewBox','0 0 '+W+' '+H);
-    let s='', N=Math.max(7, Math.round(W/120));
-    for(let i=0;i<N;i++){
-      const x=W/(N)*(i+.5)+(Math.random()*40-20), gY=320;
-      const h=150+Math.random()*80, tY=gY-h, bend=Math.random()*36-18;
-      const c=pal[i%pal.length], sc=.8+Math.random()*.5, r=16*sc;
-      s+='<g data-stem style="transform-box:fill-box;transform-origin:bottom center;transform:scaleY(0);transition:transform 1.3s cubic-bezier(.34,1.4,.5,1) '+(Math.random()*.4).toFixed(2)+'s">';
-      s+='<path d="M '+x+' '+gY+' Q '+(x+bend)+' '+((gY+tY)/2)+' '+(x+bend)+' '+tY+'" stroke="#4c9a54" stroke-width="'+(3.2*sc)+'" fill="none" stroke-linecap="round"/>';
-      s+='<path d="M '+(x+bend*.5)+' '+(tY+h*.45)+' q '+(18*sc)+' -'+(8*sc)+' '+(26*sc)+' '+(6*sc)+' q -'+(14*sc)+' '+(10*sc)+' -'+(26*sc)+' -'+(6*sc)+' z" fill="#5cb35f"/>';
-      const cx=x+bend, cy=tY; let pet='';
-      for(let k=0;k<8;k++){ const a=k/8*Math.PI*2, px=cx+Math.cos(a)*r*.9, py=cy+Math.sin(a)*r*.9;
-        pet+='<ellipse cx="'+px+'" cy="'+py+'" rx="'+(r*.55)+'" ry="'+(r*.28)+'" transform="rotate('+(a*180/Math.PI)+' '+px+' '+py+')" fill="'+c.p+'"/>'; }
-      s+='<g style="transform-box:fill-box;transform-origin:bottom center;animation:breeze '+(4.5+Math.random()*1.4).toFixed(1)+'s ease-in-out infinite">'+pet+'<circle cx="'+cx+'" cy="'+cy+'" r="'+(r*.5)+'" fill="'+c.c+'"/></g></g>';
-    }
-    s+='<path d="M0 320 L0 292 Q '+(W*.25)+' 268 '+(W*.5)+' 288 T '+W+' 284 L'+W+' 320 Z" fill="#5cb35f" opacity=".95"/>';
-    this.meadowEl.innerHTML=s;
-    this.stems=[...this.meadowEl.querySelectorAll('[data-stem]')];
-  }
+  mkP(){ return {x:Math.random()*(this.CW||innerWidth), y:Math.random()*-(this.CH||innerHeight), r:Math.random(), sp:Math.random()}; }
 
   applyTheme(name, sceneEl){
     const t=this.ATM[name];
@@ -168,10 +201,6 @@ export class LandingEngine {
     this.skyEl.style.background='linear-gradient(to bottom,'+t.top+','+t.bottom+')';
     this.ambEl.style.background=t.ambient;
     Object.assign(this.celEl.style,{background:t.cel.bg,boxShadow:t.cel.sh,top:t.cel.top,right:t.cel.right,opacity:t.cel.op});
-    const show=!!t.meadow;
-    this.meadowEl.style.opacity=show?1:0;
-    this.meadowEl.style.transform=show?'translateY(0)':'translateY(40px)';
-    this.stems.forEach(g=>g.style.transform='scaleY('+(show?1:0)+')');
     this.particleMode=t.part; this.lightning=!!t.lightning;
     const dark=!!t.dark;
     this.qa('[data-capt]', sceneEl).forEach(el=>{ el.style.color=dark?'#fff':'#1d1d1f'; el.style.textShadow=dark?'0 2px 18px rgba(0,0,0,.45)':'none'; });
@@ -200,14 +229,6 @@ export class LandingEngine {
       P.forEach(p=>{ const l=15+p.sp*15, s=12+p.sp*10;
         c.beginPath(); c.moveTo(p.x,p.y); c.lineTo(p.x-2,p.y+l); c.stroke();
         p.y+=s; p.x-=1.5; if(p.y>this.CH){p.y=-20;p.x=Math.random()*this.CW;} });
-    } else if(m==='petals'){
-      P.forEach(p=>{ const sz=5+p.r*6; p.rot+=p.rsp; p.dr+=.02;
-        c.save(); c.translate(p.x,p.y); c.rotate(p.rot); c.scale(1,.55+Math.abs(Math.sin(p.dr))*.45);
-        c.fillStyle=p.col; c.globalAlpha=.9; c.beginPath();
-        c.moveTo(0,-sz); c.bezierCurveTo(sz*.9,-sz*.4,sz*.9,sz*.4,0,sz);
-        c.bezierCurveTo(-sz*.9,sz*.4,-sz*.9,-sz*.4,0,-sz); c.fill(); c.restore();
-        p.y+=.6+p.sp*.9; p.x+=Math.sin(p.dr)*1.1; if(p.y>this.CH+10){p.y=-15;p.x=Math.random()*this.CW;} });
-      c.globalAlpha=1;
     }
     if(this.lightning){ this.flashT--;
       if(this.flashT<=0 && Math.random()<.012){
@@ -336,7 +357,7 @@ export class LandingEngine {
     const easeInOut=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
     const vh=innerHeight;
     // Atmosfer yalnizca sahne sabitlenince degil, sahne ekrana girmeden biraz once de
-    // acilir: komsu bolumlerin saydam gecis bantlari (Modlar, Asistan) gokyuzunu
+    // acilir: komsu bolumlerin saydam gecis bantlari (Seyahat) gokyuzunu
     // gostersin, sert renk kirilmasi olmasin. Birden cok sahne yakinsa ekranda en cok
     // yer kaplayan secilir.
     if(this.atmosOn){

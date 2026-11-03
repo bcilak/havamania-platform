@@ -27,27 +27,42 @@ export function bool(fd: FormData, name: string): boolean {
   return v === "on" || v === "true" || v === "1";
 }
 
+/** Dizi indeksi üst sınırı: seyrek dev dizi ("captions.4294967294") event loop'u bloklamasın. */
+const MAX_INDEX = 199;
+/** Nesne prototipine ulaştıran parçalar; bunları içeren alan tamamen atlanır. */
+const UNSAFE_PARTS = new Set(["__proto__", "constructor", "prototype"]);
+
 /**
  * "captions.0.title" gibi noktalı alan adlarını iç içe nesneye çevirir.
- * Sayısal parçalar dizi indeksidir. Yalnızca verilen önekle başlayan alanlar alınır.
+ * Sayısal parçalar dizi indeksidir; 0–199 dışı indeks, prototipe ulaşan parça, dizide sayısal olmayan anahtar
+ * ve nesne olmayan ara düğüm içeren alanlar atlanır.
+ * Yalnızca verilen önekle başlayan alanlar alınır.
  */
 export function formToObject(fd: FormData, prefix: string): Record<string, unknown> {
   const root: Record<string, unknown> = {};
   for (const [key, value] of fd.entries()) {
     if (typeof value !== "string" || !key.startsWith(prefix + ".")) continue;
     const path = key.slice(prefix.length + 1).split(".");
-    let node: Record<string, unknown> | unknown[] = root;
-    path.forEach((part, i) => {
-      const last = i === path.length - 1;
-      const nextIsIndex = !last && /^\d+$/.test(path[i + 1]);
-      const k = /^\d+$/.test(part) ? Number(part) : part;
-      const container = node as Record<string | number, unknown>;
-      if (last) container[k] = value.trim();
-      else {
-        container[k] ??= nextIsIndex ? [] : {};
-        node = container[k] as Record<string, unknown>;
+    // Tehlikeli ya da aşırı büyük indeksli alan, ağaca hiçbir şey yazmadan tümden atlanır.
+    if (path.some((p) => UNSAFE_PARTS.has(p) || (/^\d+$/.test(p) && Number(p) > MAX_INDEX))) continue;
+    let node: Record<string | number, unknown> = root;
+    for (let i = 0; i < path.length; i++) {
+      const part = path[i];
+      const isIndex = /^\d+$/.test(part);
+      // Dizi konteynerine yalnızca sayısal indeks yazılır ("length" gibi anahtarlar dizi boyunu bozar).
+      if (Array.isArray(node) && !isIndex) break;
+      const k = isIndex ? Number(part) : part;
+      if (i === path.length - 1) {
+        node[k] = value.trim();
+        break;
       }
-    });
+      // Kalıtılan değil, yalnızca kendi anahtarına bakılır.
+      if (!Object.hasOwn(node, k)) node[k] = /^\d+$/.test(path[i + 1]) ? [] : {};
+      const next = node[k];
+      // Ara düğüm nesne/dizi değilse (ör. önce "a=metin", sonra "a.b") alan atlanır.
+      if (typeof next !== "object" || next === null) break;
+      node = next as Record<string | number, unknown>;
+    }
   }
   return root;
 }

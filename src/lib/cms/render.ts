@@ -1,23 +1,15 @@
 import { TONES, type ToneId } from "@/lib/bot-config";
-import { iconSvg, resolveIcon } from "./icons";
+import { aviationSection, earlyAccessSection, energySection, roadmapSection, seyahatSection } from "./render-sections";
+import { e, icon, INK_MUTED } from "./render-util";
 import type { LandingContent, SceneContent, SceneKey } from "./schema";
 
 /*
  * Landing sayfasının işaretlemesi. Havamania.dc.html'deki (düzeltilmiş) yapının
  * birebir karşılığıdır; metinler CMS'ten gelir ve her biri HTML'e kaçışlanır.
  * data-* nitelikleri kaydırma motorunun (engine.ts) sözleşmesidir; değiştirmeyin.
+ * Kaydırmalı sahne yalnızca "core"dur. Diğer bölümler statiktir (render-sections.ts) ve
+ * data-scene taşımaz; motor her data-scene öğesini sahne sayar.
  */
-
-const e = (s: string) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-
-const INK_MUTED = "#5c5c61";
-
-/** Simge adıysa SVG, tanınmayan eski bir değerse (emoji) olduğu gibi metin. */
-const icon = (value: string) => {
-  const name = resolveIcon(value);
-  return name ? iconSvg(name) : e(value);
-};
 
 type SceneStyle = {
   id?: string;
@@ -38,24 +30,6 @@ const SCENES: Record<SceneKey, SceneStyle> = {
     label: "Panel",
     bg: "radial-gradient(120% 90% at 50% 0%,#eef4fb,#dbe6f2)",
     screens: ["#3a8fd8,#bfe0f5", "#0e2c1c,#1a4d2e", "#0b2f52,#0f3f68"],
-  },
-  agro: {
-    id: "agro",
-    accent: "#1a7f47",
-    atmos: "spring,spring,rain",
-    baseVh: 420,
-    label: "Agro",
-    bg: "radial-gradient(120% 90% at 50% 0%,#eef7ea,#dcecd4)",
-    screens: ["#2f7d3f,#a8d9a0", "#0e2c1c,#1a4d2e", "#0b2f52,#0f3f68"],
-  },
-  fly: {
-    id: "fly",
-    accent: "#2b6fb0",
-    atmos: "cloudy,storm,storm",
-    baseVh: 420,
-    label: "Fly",
-    bg: "radial-gradient(120% 90% at 50% 0%,#eaf3fb,#d3e6f5)",
-    screens: ["#2b6fb0,#bfe0f5", "#0e2c1c,#123b52", "#0b2f52,#0f3f68"],
   },
 };
 
@@ -196,7 +170,11 @@ function toneDemo(): string {
 
 export const LANDING_CSS = `
   .hm-landing *{margin:0;padding:0;box-sizing:border-box}
-  html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+  html{-webkit-text-size-adjust:100%}
+  /* Yumuşak kaydırma motor bağlandıktan sonra (hm-ready) açılır: sayfa #seyahat gibi bir
+     bağlantıyla açılırsa ilk konuma atlama anlık olsun, kayarak inmesin. Azaltılmış hareket
+     tercihinde yumuşak kaydırma hiç açılmaz. */
+  @media (prefers-reduced-motion:no-preference){html.hm-ready{scroll-behavior:smooth}}
   body{margin:0;overflow-x:hidden;-webkit-font-smoothing:antialiased;background:#fff;color:#1d1d1f;line-height:1.5;
        font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Helvetica,Arial,sans-serif;color-scheme:light}
   .hm-landing a{color:#0071e3;text-decoration:none}
@@ -229,8 +207,52 @@ export const LANDING_CSS = `
   .hm-landing header > [data-delay="2"]{animation-delay:.16s}
   .hm-landing header > [data-delay="3"]{animation-delay:.24s}
   @media (prefers-reduced-motion:reduce){.hm-landing header > [data-reveal]{animation:none}}
+  /* Statik bölümler (render-sections.ts) */
+  .hm-landing section[id]:not([data-scene]){scroll-margin-top:60px}
+  .hm-card{background:#fff;border:1px solid #d2d2d7;border-radius:20px;padding:clamp(20px,4vw,26px) clamp(18px,4vw,24px);text-align:left}
+  .hm-ico{width:40px;height:40px;border-radius:12px;background:rgba(0,113,227,.1);color:#0071e3;display:grid;place-items:center;margin-bottom:14px;flex:0 0 auto}
+  .hm-ico > span{width:22px;height:22px;display:grid;place-items:center}
+  .hm-card-title{font-size:clamp(16px,3.4vw,18px);font-weight:600;margin-bottom:6px;line-height:1.3}
+  .hm-card-text{font-size:clamp(13px,2.6vw,14px);color:${INK_MUTED}}
+  .hm-sub{font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:${INK_MUTED};margin:18px 0 8px}
+  .hm-badge{display:inline-block;background:rgba(0,113,227,.08);color:#0066cc;padding:5px 14px;border-radius:999px;font-size:clamp(12px,2.6vw,13px);font-weight:600;line-height:1.4}
+  /* Yeşil rozet yazısı #166c3b: rgba(26,127,71,.1) zemin üzerinde yaklaşık 5,7:1 (#1a7f47 yaklaşık 4,4:1 kalıyordu). */
+  .hm-badge[data-state="live"]{background:rgba(26,127,71,.1);color:#166c3b}
+  .hm-badge[data-state="soon"]{background:rgba(0,113,227,.08);color:#0066cc}
+  .hm-badge[data-state="planned"],.hm-badge[data-state="vision"]{background:rgba(92,92,97,.1);color:#5c5c61}
+  .hm-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+  .hm-feature-grid{display:grid;grid-template-columns:1fr;gap:clamp(12px,2.5vw,18px)}
+  @media (min-width:560px){.hm-feature-grid{grid-template-columns:repeat(2,1fr)}}
+  @media (min-width:900px){.hm-feature-grid{grid-template-columns:repeat(3,1fr)}}
+  .hm-two{display:grid;grid-template-columns:1fr;gap:clamp(20px,4vw,40px)}
+  @media (min-width:760px){.hm-two{grid-template-columns:repeat(2,1fr)}}
+  .hm-list{list-style:none;display:grid;gap:8px;text-align:left}
+  .hm-list li{position:relative;padding-left:20px;font-size:clamp(14px,2.6vw,15px);line-height:1.45}
+  .hm-list li::before{content:"";position:absolute;left:2px;top:.55em;width:7px;height:7px;border-radius:50%;background:#0071e3}
+  .hm-agro{display:flex;gap:16px;align-items:flex-start}
+  .hm-agro .hm-ico{margin-bottom:0}
+  .hm-sample{position:relative;padding-top:clamp(40px,6vw,48px);box-shadow:0 20px 50px rgba(20,40,70,.08)}
+  .hm-sample-tag{position:absolute;top:14px;right:14px;background:#f0f2f5;border:1px solid #d2d2d7;color:${INK_MUTED};border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;line-height:1.5}
+  .hm-sample-head{font-size:clamp(17px,3.6vw,20px);font-weight:600;letter-spacing:-.01em}
+  .hm-route{list-style:none;position:relative;margin:16px 0 0;padding-left:26px}
+  .hm-route::before{content:"";position:absolute;left:7px;top:10px;bottom:10px;width:2px;background:#d2d2d7}
+  .hm-route li{position:relative;display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:15px}
+  .hm-route li::before{content:"";position:absolute;left:-26px;top:50%;width:14px;height:14px;margin-top:-7px;border-radius:50%;background:#fff;border:3px solid #0071e3}
+  .hm-route b{font-weight:600;font-variant-numeric:tabular-nums}
+  .hm-alert{display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding:12px 14px;border-radius:14px;background:rgba(0,113,227,.08);font-size:14px;line-height:1.4}
+  .hm-alert-ico{width:18px;height:18px;flex:0 0 auto;color:#0071e3;margin-top:1px}
+  .hm-pills{list-style:none;display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:14px}
+  .hm-pills li{background:#fff;border:1px solid #d2d2d7;border-radius:999px;padding:7px 14px;font-size:14px}
+  .hm-note{max-width:62ch;margin:clamp(24px,4vh,32px) auto 0;text-align:center;font-size:13px;color:${INK_MUTED};text-wrap:pretty}
+  .hm-roadmap{list-style:none;display:grid;grid-template-columns:1fr;gap:clamp(12px,2.5vw,18px)}
+  @media (min-width:960px){.hm-roadmap{grid-template-columns:repeat(4,1fr)}}
+  .hm-phase{border-top:4px solid #5c5c61}
+  .hm-phase[data-state="live"]{border-top-color:#1a7f47}
+  .hm-phase[data-state="soon"]{border-top-color:#0071e3}
+  .hm-phase-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+  .hm-phase-label{font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:${INK_MUTED}}
+  .hm-cta:focus-visible{outline:2px solid #0071e3;outline-offset:3px}
   @keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(8px)}}
-  @keyframes breeze{0%,100%{rotate:-4deg}50%{rotate:4deg}}
   @media (prefers-reduced-motion:reduce){.hm-landing *{animation-duration:.001s!important}}
   @media (max-width:600px){
     [data-celestial]{top:8%!important;right:5%!important;width:clamp(52px,13vw,84px)!important;height:clamp(52px,13vw,84px)!important}
@@ -244,7 +266,13 @@ export const LANDING_CSS = `
   }
 `;
 
-export function renderLanding(c: LandingContent): string {
+export type RenderOpts = {
+  /** Erken erişim formu sayfada varsa verilir. Yoksa #erken-erisim bölümü ve CTA'lar çıkmaz. */
+  earlyAccess?: { token: string; status?: { kind: "ok" | "error"; message: string; field?: string } } | null;
+};
+
+export function renderLanding(c: LandingContent, opts: RenderOpts = {}): string {
+  const withEa = Boolean(opts.earlyAccess);
   const navLink = (href: string, label: string) =>
     `<a href="${href}" class="hm-nav-link" style="color:#1d1d1f;font-size:13px;opacity:.85;white-space:nowrap">${e(label)}</a>`;
   const copyright = c.footer.copyright.replace(/©\s*\d{4}/, `© ${new Date().getFullYear()}`);
@@ -256,7 +284,6 @@ export function renderLanding(c: LandingContent): string {
   <div data-celestial style="position:absolute;top:12%;right:14%;width:clamp(64px,12vw,120px);height:clamp(64px,12vw,120px);border-radius:50%;background:#fff3b0;box-shadow:0 0 60px 20px rgba(255,240,150,.6);transition:all 1.2s ease"></div>
   <canvas data-particles aria-hidden="true" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
   <div data-flash style="position:absolute;inset:0;background:#fff;opacity:0;transition:opacity .08s linear"></div>
-  <svg data-meadow viewBox="0 0 1200 320" preserveAspectRatio="xMidYMax slice" aria-hidden="true" style="position:absolute;bottom:0;left:0;width:100%;height:min(32vh,280px);opacity:0;transform:translateY(40px);transition:opacity 1.4s ease,transform 1.4s cubic-bezier(.22,1,.36,1)"></svg>
 </div>
 
 <nav style="position:fixed;top:0;left:0;right:0;z-index:200;min-height:52px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px clamp(12px,4vw,40px);background:rgba(255,255,255,.72);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid rgba(0,0,0,.06)">
@@ -267,8 +294,9 @@ export function renderLanding(c: LandingContent): string {
   </div>
   <div style="display:flex;align-items:center;gap:clamp(14px,2.6vw,24px);flex:0 0 auto">
     ${navLink("#panel", "Hava")}
-    ${navLink("#agro", "Agro")}
-    ${navLink("#fly", "Fly")}
+    ${navLink("#seyahat", "Seyahat")}
+    ${navLink("#enerji", "Enerji")}
+    ${navLink("#ucus", "Uçuş")}
     ${navLink("#asistan", "Asistan")}
     <a href="#premium" class="hm-nav-cta" style="background:#0071e3;color:#fff;padding:7px 15px;border-radius:999px;font-size:13px;font-weight:500;white-space:nowrap">${e(c.nav.ctaLabel)}</a>
   </div>
@@ -282,24 +310,21 @@ export function renderLanding(c: LandingContent): string {
 </header>
 ${scene("core", c.scenes.core)}
 
-<section id="modlar" data-screen-label="Modlar" style="position:relative;z-index:1;min-height:70svh;display:flex;align-items:center;justify-content:center;text-align:center;padding:calc(clamp(64px,12vh,90px) + 14vh) clamp(18px,5vw,24px);background:linear-gradient(180deg,transparent,#0b1b2b 18vh,#132a44 calc(100% - 18vh),transparent);color:#fff">
-  <div style="max-width:760px;margin:0 auto">
-    <div data-reveal style="display:inline-block;background:rgba(125,180,255,.16);color:#7db4ff;border:1px solid rgba(125,180,255,.3);padding:5px 14px;border-radius:999px;font-size:clamp(12px,2.6vw,13px);font-weight:600;margin-bottom:20px">${e(c.phase2.badge)}</div>
-    <h2 data-reveal data-delay="1" style="font-size:clamp(26px,6vw,52px);font-weight:600;letter-spacing:-.03em;line-height:1.09;color:#fff;max-width:16ch;margin:0 auto;text-wrap:balance">${e(c.phase2.title)}</h2>
-    <p data-reveal data-delay="2" style="font-size:clamp(15px,2.6vw,24px);color:rgba(255,255,255,.72);max-width:44ch;margin:18px auto 0;line-height:1.4;text-wrap:pretty">${e(c.phase2.text)}</p>
-  </div>
-</section>
-${scene("agro", c.scenes.agro)}
-${scene("fly", c.scenes.fly)}
+${seyahatSection(c)}
+${energySection(c, withEa)}
+${aviationSection(c, withEa)}
 
-<section id="asistan" data-screen-label="Asistan" style="position:relative;z-index:1;background:linear-gradient(180deg,transparent,#f5f5f7 18vh)">
-  <div style="padding:calc(clamp(64px,12vh,140px) + 12vh) clamp(18px,5vw,24px) clamp(64px,12vh,140px);max-width:760px;margin:0 auto;text-align:center">
+<section id="asistan" data-screen-label="Asistan" style="position:relative;z-index:1;background:#f5f5f7">
+  <div style="padding:clamp(64px,12vh,140px) clamp(18px,5vw,24px) clamp(64px,12vh,140px);max-width:760px;margin:0 auto;text-align:center">
     <div data-reveal style="font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#0071e3;margin-bottom:14px">${e(c.assistant.eyebrow)}</div>
     <h2 data-reveal data-delay="1" style="font-size:clamp(26px,6vw,52px);font-weight:600;letter-spacing:-.03em;line-height:1.09;text-wrap:balance">${e(c.assistant.title)}</h2>
     <p data-reveal data-delay="2" style="font-size:clamp(15px,2.6vw,24px);color:${INK_MUTED};margin-top:18px;line-height:1.4;text-wrap:pretty">${e(c.assistant.text)}</p>
     ${toneDemo()}
   </div>
 </section>
+
+${roadmapSection(c)}
+${withEa ? earlyAccessSection(c) : ""}
 
 <section id="premium" data-screen-label="Premium" style="position:relative;z-index:1;padding:clamp(72px,14vh,150px) clamp(18px,5vw,24px);text-align:center;background:linear-gradient(180deg,#f5f5f7,#ebebef)">
   <div style="max-width:760px;margin:0 auto">
