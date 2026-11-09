@@ -36,7 +36,7 @@ services:
       DEBUG: "false"
       DATABASE_URL: postgresql+psycopg://havamania_api:${POSTGRES_PASSWORD}@db:5432/havamania_api
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-admin.json
-    # Apache yalnızca 127.0.0.1:8010 üzerinden bağlanır; docker-proxy bağlantıyı ağ geçidi adresinden (172.31.250.1)
+    # Apache yalnızca 127.0.0.1:8020 üzerinden bağlanır; docker-proxy bağlantıyı ağ geçidi adresinden (172.31.250.1)
     # getirir. Yalnızca o adrese güvenilir: uvicorn istemci IP'sini X-Forwarded-For'un Apache'nin eklediği en sağ
     # değerinden alır, böylece hız sınırı kullanıcı başına çalışır ve başlık sahteciliği işe yaramaz.
     command:
@@ -48,7 +48,7 @@ services:
       - --forwarded-allow-ips=172.31.250.1
       - --timeout-keep-alive=75
     ports:
-      - "127.0.0.1:8010:8000"
+      - "127.0.0.1:8020:8000"
     volumes:
       - avatars:/app/static/avatars
       - /opt/havamania-api/firebase-admin.json:/run/secrets/firebase-admin.json:ro

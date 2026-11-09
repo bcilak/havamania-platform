@@ -7,7 +7,7 @@ Android uygulamasının backend'i (FastAPI, `altikoddigitalsolutions/Havamania-M
 | Kaynak kod | `/opt/havamania-api/src` (mobil deponun klonu) |
 | Ayarlar ve gizli dosyalar | `/opt/havamania-api/.env`, `/opt/havamania-api/firebase-admin.json` (yalnızca sunucuda) |
 | Compose dosyası | `/opt/havamania/deploy/api/docker-compose.yml` (bu depodan) |
-| Uygulama portu | `127.0.0.1:8010` (yalnızca Apache erişir) |
+| Uygulama portu | `127.0.0.1:8020` (yalnızca Apache erişir) |
 | Docker ağı | `172.31.250.0/24` |
 | Veritabanı | Ayrı PostgreSQL 16 konteyneri; platformun veritabanından bağımsız |
 
@@ -50,7 +50,7 @@ dig +short api.havamania.com
 Port ve ağın boş olduğunu kontrol edin (ikisi de boş çıktı vermeli):
 
 ```bash
-ss -ltnp | grep ':8010 '
+ss -ltnp | grep ':8020 '
 docker network inspect $(docker network ls -q) --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' | tr ' ' '\n' | grep '^172.31.250'
 ```
 
@@ -102,12 +102,12 @@ hma run --rm api alembic upgrade head
 hma run --rm api alembic current
 ```
 
-Son komut `0017_push_deliveries (head)` göstermeli.
+Son komut `0019_chatbot_replay (head)` göstermeli (mobil depo `cfed9c3`, 9 Kasım 2026). Daha yeni bir sürüm kuruyorsanız `backend/alembic/versions/` içindeki en büyük numaralı dosyayı görmelisiniz.
 
 ```bash
 hma up -d api
 hma ps
-curl -s http://127.0.0.1:8010/health
+curl -s http://127.0.0.1:8020/health
 ```
 
 `hma ps`'te ikisi de `healthy` olmalı; son komut `{"status":"ok"}` döner. Açılmazsa `hma logs --tail 50 api`.
@@ -133,11 +133,11 @@ ProxyPass /docs !
 ProxyPass /redoc !
 ProxyPass /openapi.json !
 ProxyPass /v1/metrics !
-ProxyPass / http://127.0.0.1:8010/
-ProxyPassReverse / http://127.0.0.1:8010/
+ProxyPass / http://127.0.0.1:8020/
+ProxyPassReverse / http://127.0.0.1:8020/
 ```
 
-- `/docs`, `/redoc`, `/openapi.json` ve `/v1/metrics` dışarıya kapalıdır (404). Metrikler sunucunun içinden `http://127.0.0.1:8010/v1/metrics` ile okunur.
+- `/docs`, `/redoc`, `/openapi.json` ve `/v1/metrics` dışarıya kapalıdır (404). Metrikler sunucunun içinden `http://127.0.0.1:8020/v1/metrics` ile okunur.
 - `ProxyTimeout 90`, backend'in 50 saniyelik platform beklemesinden uzun olmalı.
 
 Sonra **SSL Certificate › Let's Encrypt** › `api.havamania.com` için sertifika alın (DNS yayılmış olmalı). **Website Redirects** ile HTTP → HTTPS yönlendirmesini açın.
@@ -160,11 +160,13 @@ Hız sınırının kullanıcı başına çalıştığını kontrol edin: dışar
 
 ```cron
 */5 * * * * docker compose -f /opt/havamania/deploy/api/docker-compose.yml --env-file /opt/havamania-api/.env exec -T api python -m app.services.resume_account_deletions >> /var/log/havamania-api-silme.log 2>&1
+17 * * * * docker compose -f /opt/havamania/deploy/api/docker-compose.yml --env-file /opt/havamania-api/.env exec -T api python -m app.services.chatbot_replay >> /var/log/havamania-api-replay.log 2>&1
 30 2 * * * mkdir -p /opt/havamania-api-yedek && docker compose -f /opt/havamania/deploy/api/docker-compose.yml --env-file /opt/havamania-api/.env exec -T db pg_dump -U havamania_api havamania_api | gzip > /opt/havamania-api-yedek/db-$(date +\%F).sql.gz && find /opt/havamania-api-yedek -mtime +14 -delete
 ```
 
 - İlki bekleyen hesap silme işlerini her 5 dakikada yeniden dener (çıkış kodu 1 = en az bir iş hâlâ başarısız; log dosyasına bakın).
-- İkincisi her gece veritabanı yedeği alır, 14 günden eskileri siler.
+- İkincisi saatte bir, süresi (24 saat) dolmuş asistan tekrar kayıtlarındaki istek gövdesini ve yanıtı temizler (migration 0019). Bu gövdeler profil, sağlık ve seyahat bilgisi içerebileceği için görev KVKK açısından zorunludur; model çağrısı yapmaz.
+- Üçüncüsü her gece veritabanı yedeği alır, 14 günden eskileri siler.
 - Platformun kendi KVKK görevi (`/api/cron/kvkk`, DEPLOY-VIRTUALMIN.md Aşama 8) de kurulu olmalı: `crontab -l | grep cron/kvkk`.
 
 ## Aşama 9 · Hesap silmeyi açma (sonra)
@@ -185,7 +187,7 @@ cd /opt/havamania && git pull
 hma build api
 hma run --rm api alembic upgrade head
 hma up -d api
-curl -s http://127.0.0.1:8010/health
+curl -s http://127.0.0.1:8020/health
 ```
 
 Migration, yeni kod açılmadan önce çalışır; yeni kod eski şemayla çalışmaz.
